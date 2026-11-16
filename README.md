@@ -61,7 +61,12 @@ BuildKit sets `TARGETARCH`. The default is `amd64`.
 
 ## Image from GitHub
 
-`.github/workflows/image.yml` runs on every push to `main`. It runs `make test`, then pushes a `linux/amd64` image to `ghcr.io/<owner>/<repo>` with tags `latest`, `v0.31.0`, and the commit sha. The workflow's `GITHUB_TOKEN` is enough to publish. A private repository gets a private package; pull it after `docker login ghcr.io`.
+Pushes and pull requests to `main` run `make test` and do not publish an image. Pushing a tag such as `v0.31.0` publishes `ghcr.io/<owner>/<repo>:<tag>` and `:latest`. A manual run publishes `ghcr.io/<owner>/<repo>:sha-<commit>` and leaves `:latest` where it is. The image is `linux/amd64`, carries an SBOM, and gets a build-provenance attestation. A private repository gets a private package; pull it after `docker login ghcr.io`.
+
+```sh
+git tag v0.31.0
+git push origin v0.31.0
+```
 
 ## Moving to a newer upstream release
 
