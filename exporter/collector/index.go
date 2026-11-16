@@ -151,6 +151,11 @@ func ModuleForIndexes(src *config.Module, suffixes []string) (*config.Module, bo
 	return &dst, true, nil
 }
 
+// integerIndexWidth reports how many dotted components a suffix needs when
+// every index is a single integer. The names are the integer arm of
+// indexOidsAsString in this package: each consumes one sub-identifier.
+// String and address indexes consume more than one, so a caller-supplied
+// suffix does not address those rows. Keep this switch aligned with that function.
 func integerIndexWidth(metric *config.Metric) (int, bool) {
 	if len(metric.Indexes) == 0 {
 		return 0, false
@@ -165,6 +170,9 @@ func integerIndexWidth(metric *config.Metric) (int, bool) {
 	return len(metric.Indexes), true
 }
 
+// scalarOID is the instance identifier of a scalar object. An SNMP GET
+// addresses the instance, which is the object identifier with a trailing
+// ".0". Hand-written modules sometimes already include it.
 func scalarOID(oid string) string {
 	if strings.HasSuffix(oid, ".0") {
 		return oid

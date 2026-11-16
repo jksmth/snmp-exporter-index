@@ -89,6 +89,7 @@ docker build -t snmp-exporter-index:v0.31.0 .
 | --- | --- |
 | `exporter/` | The change. `collector/index.go` decides which OIDs to GET. `index_param.go` is the HTTP wiring. |
 | `scripts/apply.py` | Copies that Go onto an upstream tree. |
+| `release/platforms.txt` | Image architectures and release binaries. |
 | `examples/if_index.yml` | The smaller module. |
 | `sim/` | The SNMP agent. |
 | `bench/` | The measurement, and `make bench` which refreshes it. |
@@ -101,16 +102,21 @@ cd snmp_exporter
 patch -p1 < /path/to/snmp_exporter-v0.31.0-index.patch
 ```
 
-## Image
+## Image and binaries
 
-Pushes and pull requests to `main` run the tests and do not publish. Pushing a tag named for the upstream release, such as `v0.31.0`, publishes `ghcr.io/<owner>/<repo>:<tag>` and `:latest`, and attaches the patch to the GitHub release. A manual run publishes `ghcr.io/<owner>/<repo>:sha-<commit>` and leaves `:latest` where it is.
+Pushes and pull requests to `main` run the tests and do not publish. Pushing a tag named for the upstream release, such as `v0.31.0`, publishes `ghcr.io/<owner>/<repo>:<tag>` and `:latest`, and attaches the patch, the binaries, and `sha256sums.txt` to the GitHub release. A manual run publishes `ghcr.io/<owner>/<repo>:sha-<commit>` and leaves `:latest` where it is.
 
-The image is `linux/amd64` and carries an SBOM and build provenance in the registry. Package visibility follows the repository.
+`make image` builds `linux/amd64`. A published image is a manifest for the container platforms in `release/platforms.txt`: `linux/amd64`, `linux/arm64`, `linux/arm/v7`, `linux/ppc64le`, and `linux/s390x`. Each image carries an SBOM and build provenance in the registry. Package visibility follows the repository.
+
+The same file lists the release binaries: those Linux architectures, plus `darwin/amd64`, `darwin/arm64`, and `windows/amd64` (tar.gz, and zip on Windows). Each archive contains the binary, upstream `snmp.yml`, `if_index.yml`, `LICENSE`, and `NOTICE`.
 
 ```sh
+make binaries
 git tag v0.31.0
 git push origin v0.31.0
 ```
+
+A scheduled workflow checks the latest snmp_exporter release once a day. When that tag is not already released here, it runs the tests against that tag and, if the patch applies and the tests pass, publishes the image and the binaries under the same version. A failure leaves the previous release in place and opens an issue. The anchors in `scripts/apply.py` are what make a moved upstream handler fail that run.
 
 Counters are still rendered the way snmp_exporter renders them, including the 2^53 wrap. `--no-snmp.wrap-large-counters` is the upstream switch for a consumer that is not Prometheus.
 

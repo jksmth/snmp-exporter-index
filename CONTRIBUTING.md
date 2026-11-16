@@ -9,9 +9,16 @@ make test         # simulator, index tests, patch round-trip, config load
 make bench-check  # walk 32 and 256 interfaces, then fetch one
 make bench        # switch, core, and subscriber sizes; rewrites bench/RESULTS.md
 make patch        # dist/snmp_exporter-v0.31.0-index.patch
-make image
+make binaries     # dist archives for release/platforms.txt
+make image        # local linux/amd64 image
 ```
 
-`VERSION` selects the upstream tag. The image tag and the patch are that same version.
+`VERSION` selects the upstream tag. The image tag, the patch, and the binaries are that same version.
+
+`release/platforms.txt` is the list of image architectures and binaries. Container rows use the Prometheus busybox repository for that architecture (`busybox-linux-armv7` for arm v7). Adding a row is enough for the next tag build; the release workflow reads the file.
+
+CI takes the Go version from the cloned upstream `go.mod`. The image's `GOLANG_VERSION` is only the compiler that starts the build. A newer `go` line is downloaded by the toolchain.
+
+The daily follow workflow publishes an upstream tag only after `make test` passes for that tag. Update the anchors, merge to `main`, and the next run retries. It does not move a tag that already has a release.
 
 The simulator speaks SNMPv2c only. `make bench` is the measurement checked into `bench/RESULTS.md`. Packet counts should stay stable. Loopback times will not.

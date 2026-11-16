@@ -1,12 +1,16 @@
 # Drop-in snmp_exporter. Same flags, port, config path, and Prometheus text.
 # A scrape URL may also pass index=<instance suffix>.
+#
+# GOLANG_VERSION is the bootstrap compiler. When upstream go.mod asks for a
+# newer toolchain, the image downloads it.
 
 ARG SNMP_EXPORTER_VERSION=v0.31.0
 ARG GOLANG_VERSION=1.26.0
 
-FROM golang:${GOLANG_VERSION}-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:${GOLANG_VERSION}-bookworm AS build
 ARG SNMP_EXPORTER_VERSION
 ARG TARGETARCH=amd64
+ARG TARGETVARIANT
 ARG BUILD_DATE=unknown
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git python3 \
@@ -17,12 +21,23 @@ COPY exporter /opt/overlay/exporter
 COPY scripts/apply.py /opt/overlay/scripts/apply.py
 RUN python3 /opt/overlay/scripts/apply.py /src \
     && rm -rf .git
-RUN CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" go build -trimpath \
+# Cross-compile for the image platform. arm/v7 sets TARGETARCH=arm and
+# TARGETVARIANT=v7; Go wants GOARCH=arm and GOARM=7.
+RUN set -eu; \
+    goarm=""; \
+    if [ "${TARGETARCH}" = "arm" ]; then \
+      goarm="${TARGETVARIANT#v}"; \
+      if [ -z "${goarm}" ]; then goarm=7; fi; \
+    fi; \
+    CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" GOARM="${goarm}" go build -trimpath \
     -ldflags="-s -w -X github.com/prometheus/common/version.Version=${SNMP_EXPORTER_VERSION}-index -X github.com/prometheus/common/version.Revision=index -X github.com/prometheus/common/version.BuildUser=snmp-exporter-index -X github.com/prometheus/common/version.BuildDate=${BUILD_DATE}" \
     -o /out/snmp_exporter .
 
-ARG TARGETARCH=amd64
-FROM quay.io/prometheus/busybox-linux-${TARGETARCH}:latest
+# Prometheus publishes one busybox repository per architecture. arm v7 is
+# busybox-linux-armv7, which is not Docker's TARGETARCH ("arm"), so the
+# caller passes BUSYBOX_ARCH from release/platforms.txt.
+ARG BUSYBOX_ARCH=amd64
+FROM quay.io/prometheus/busybox-linux-${BUSYBOX_ARCH}:latest
 LABEL org.opencontainers.image.title="snmp_exporter"
 LABEL org.opencontainers.image.description="snmp_exporter with an optional index query parameter"
 LABEL org.opencontainers.image.licenses="Apache-2.0"

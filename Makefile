@@ -5,8 +5,9 @@ STAMP := $(CACHE)/.stamp
 PATCH := dist/snmp_exporter-$(VERSION)-index.patch
 SIM := .cache/ifsim
 EXPORTER := $(CACHE)/snmp_exporter
+BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-.PHONY: test patch image bench bench-check clean
+.PHONY: test patch image binaries bench bench-check clean
 
 $(STAMP): exporter/collector/index.go exporter/collector/index_test.go exporter/index_param.go scripts/apply.py scripts/rebuild.sh
 	VERSION=$(VERSION) CACHE=$(CACHE) scripts/rebuild.sh
@@ -39,8 +40,15 @@ patch:
 image:
 	docker build \
 		--build-arg SNMP_EXPORTER_VERSION=$(VERSION) \
-		--build-arg BUILD_DATE=$$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+		--build-arg TARGETARCH=amd64 \
+		--build-arg BUSYBOX_ARCH=amd64 \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-t $(IMAGE) .
+
+# Cross-compile the archives in release/platforms.txt. The patch must already
+# exist (the stamp builds it) so sha256sums.txt covers the patch too.
+binaries: $(STAMP)
+	VERSION=$(VERSION) BUILD_DATE=$(BUILD_DATE) CACHE=$(CACHE) python3 scripts/release.py binaries
 
 # A short walk-versus-index check. Used in CI.
 bench-check: $(EXPORTER) $(SIM)

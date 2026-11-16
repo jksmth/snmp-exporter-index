@@ -1,0 +1,79 @@
+name: Follow upstream
+
+on:
+  schedule:
+    # 07:17 UTC, which is 07:17 in Europe/London during winter time.
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  issues: write
+
+concurrency:
+  group: follow-upstream
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.d.outputs.version }}
+      release: ${{ steps.d.outputs.release }}
+    steps:
+      - id: d
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -eu
+          upstream=$(gh api repos/prometheus/snmp_exporter/releases/latest --jq .tag_name)
+          case "$upstream" in
+            v[0-9]*) ;;
+            *) echo "unexpected upstream tag: $upstream" >&2; exit 1 ;;
+          esac
+          echo "upstream ${upstream}"
+          if gh release view "$upstream" --repo "$REPOSITORY" >/dev/null 2>&1; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "already published ${upstream}"
+          else
+            echo "version=${upstream}" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    needs: detect
+    if: needs.detect.outputs.release == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.detect.outputs.version }}
+      move_latest: "true"
+    secrets: inherit
+
+  report:
+    needs: [detect, publish]
+    if: failure() && needs.detect.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open an issue for the failed follow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.detect.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          title="Release failed for snmp_exporter ${VERSION}"
+          body=$(printf '%s\n' \
+            "The daily follow of prometheus/snmp_exporter ${VERSION} failed, so no image or binaries were published for it." \
+            "" \
+            "The usual cause is that scripts/apply.py no longer matches that tag. The run is ${RUN_URL}.")
+          number=$(gh issue list --state open --limit 50 --json number,title \
+            --jq ".[] | select(.title==\"${title}\") | .number" | head -n 1)
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "Failed again: ${RUN_URL}"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

@@ -4,63 +4,144 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: Upstream snmp_exporter tag to release
+        required: true
+        type: string
+      move_latest:
+        description: Also tag the image as latest
+        required: false
+        type: string
+        default: "true"
 
 permissions:
-  contents: read
+  contents: write
+  packages: write
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.p.outputs.version }}
+      image: ${{ steps.p.outputs.image }}
+      date: ${{ steps.p.outputs.date }}
+      publish_release: ${{ steps.p.outputs.publish_release }}
+      move_latest: ${{ steps.p.outputs.move_latest }}
+      include: ${{ steps.p.outputs.include }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - id: p
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_LATEST: ${{ inputs.move_latest }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -eu
+          image="ghcr.io/$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          if [ -n "$INPUT_VERSION" ]; then
+            version="$INPUT_VERSION"
+            publish_release=true
+            move_latest="${INPUT_LATEST:-true}"
+          elif [ "$REF_TYPE" = "tag" ]; then
+            version="$REF_NAME"
+            publish_release=true
+            move_latest=true
+          else
+            version="v0.31.0"
+            publish_release=false
+            move_latest=false
+          fi
+          case "$version" in
+            v[0-9]*) ;;
+            *) echo "refusing version: $version" >&2; exit 1 ;;
+          esac
+          include=$(python3 scripts/release.py matrix)
+          {
+            echo "version=${version}"
+            echo "image=${image}"
+            echo "date=${date}"
+            echo "publish_release=${publish_release}"
+            echo "move_latest=${move_latest}"
+            echo "include=${include}"
+          } >> "$GITHUB_OUTPUT"
+
   test:
+    needs: plan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Clone upstream and apply the patch
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: make patch
+
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.0"
+          go-version-file: .cache/snmp_exporter/go.mod
           cache: false
 
       - name: Test the source, the generated patch, and the example module
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
         run: make test
 
       - name: Walk a simulated switch and fetch one interface
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
         run: make bench-check
 
-  publish:
-    needs: test
+  binaries:
+    needs: [plan, test]
+    if: needs.plan.outputs.publish_release == 'true'
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Clone upstream and apply the patch
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: make patch
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .cache/snmp_exporter/go.mod
+          cache: false
+
+      - name: Cross-compile release archives
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          BUILD_DATE: ${{ needs.plan.outputs.date }}
+        run: make binaries
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets
+          path: |
+            dist/snmp_exporter-*
+            dist/sha256sums.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  image:
+    needs: [plan, test]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.include) }}
     permissions:
-      contents: write
+      contents: read
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Generate the patch from the Go sources
-        env:
-          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.31.0' }}
-        run: make patch
-
-      - name: Image name
-        id: image
-        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
-
-      - name: Tags
-        id: tags
-        run: |
-          image="${{ steps.image.outputs.name }}"
-          {
-            echo "list<<EOF"
-            if [ "${{ github.ref_type }}" = "tag" ]; then
-              echo "${image}:${{ github.ref_name }}"
-              echo "${image}:latest"
-            else
-              echo "${image}:sha-${GITHUB_SHA::12}"
-            fi
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Build date
-        id: built
-        run: echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
@@ -70,42 +151,150 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          push: true
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           provenance: true
           sbom: true
-          tags: ${{ steps.tags.outputs.list }}
           build-args: |
-            SNMP_EXPORTER_VERSION=${{ github.ref_type == 'tag' && github.ref_name || 'v0.31.0' }}
-            BUILD_DATE=${{ steps.built.outputs.date }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            SNMP_EXPORTER_VERSION=${{ needs.plan.outputs.version }}
+            BUSYBOX_ARCH=${{ matrix.busybox }}
+            BUILD_DATE=${{ needs.plan.outputs.date }}
+          outputs: type=image,name=${{ needs.plan.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
-      - name: Attach the patch to the release
-        if: github.ref_type == 'tag'
+      - name: Export the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/digests"
+          printf '%s\n' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: digest-${{ matrix.name }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: [plan, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: digest-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the manifest
+        env:
+          IMAGE: ${{ needs.plan.outputs.image }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          PUBLISH_RELEASE: ${{ needs.plan.outputs.publish_release }}
+          MOVE_LATEST: ${{ needs.plan.outputs.move_latest }}
+        run: |
+          set -eu
+          shopt -s nullglob
+          refs=()
+          for digest in /tmp/digests/*; do
+            base=$(basename "$digest")
+            printf '%s\n' "$base" | grep -Eq '^[0-9a-f]{64}$'
+            refs+=("${IMAGE}@sha256:${base}")
+          done
+          if [ "${#refs[@]}" -eq 0 ]; then
+            echo "no image digests" >&2
+            exit 1
+          fi
+          if [ "$PUBLISH_RELEASE" = "true" ]; then
+            primary="${IMAGE}:${VERSION}"
+            args=(-t "$primary")
+            if [ "$MOVE_LATEST" = "true" ]; then
+              args+=(-t "${IMAGE}:latest")
+            fi
+          else
+            primary="${IMAGE}:sha-${GITHUB_SHA::12}"
+            args=(-t "$primary")
+          fi
+          docker buildx imagetools create "${args[@]}" "${refs[@]}"
+          docker buildx imagetools inspect "$primary"
+
+  attach:
+    needs: [plan, merge, binaries]
+    if: needs.plan.outputs.publish_release == 'true' && needs.merge.result == 'success' && needs.binaries.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Tag and publish the GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          IMAGE: ${{ needs.plan.outputs.image }}
+          MOVE_LATEST: ${{ needs.plan.outputs.move_latest }}
         run: |
-          tag="${{ github.ref_name }}"
-          asset="dist/snmp_exporter-${tag}-index.patch"
-          notes=$(cat <<EOF
-          snmp_exporter ${tag} with an optional \`index\` query parameter.
+          set -eu
+          test -n "$(find dist -maxdepth 1 -type f -name 'snmp_exporter-*' -print -quit)"
+          test -f dist/sha256sums.txt
+          remote=$(git ls-remote origin "refs/tags/${VERSION}^{}" | awk '{print $1}')
+          if [ -z "$remote" ]; then
+            remote=$(git ls-remote origin "refs/tags/${VERSION}" | awk '{print $1}')
+          fi
+          if [ -z "$remote" ]; then
+            git tag "$VERSION"
+            git push origin "refs/tags/${VERSION}"
+          elif [ "$remote" != "$GITHUB_SHA" ]; then
+            echo "tag ${VERSION} points at ${remote}, this run is ${GITHUB_SHA}" >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          version = os.environ["VERSION"]
+          image = os.environ["IMAGE"]
+          latest = " and `:latest`" if os.environ.get("MOVE_LATEST") == "true" else ""
+          text = f"""snmp_exporter {version} with an optional `index` query parameter.
 
-          Image: \`ghcr.io/${{ github.repository }}:${tag}\` and \`:latest\` (\`linux/amd64\`).
+          Image: `{image}:{version}`{latest}.
 
-          Apply the asset to a clean [prometheus/snmp_exporter](https://github.com/prometheus/snmp_exporter) ${tag} tree:
+          Platforms: linux/amd64, linux/arm64, linux/arm/v7, linux/ppc64le, linux/s390x.
 
-          \`\`\`sh
-          patch -p1 < snmp_exporter-${tag}-index.patch
-          \`\`\`
-          EOF
-          )
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "$asset" --clobber
-            gh release edit "$tag" --notes "$notes"
+          Binaries for those Linux architectures, plus darwin/amd64, darwin/arm64, and windows/amd64, are attached with `sha256sums.txt`.
+
+          Apply the patch to a clean [prometheus/snmp_exporter](https://github.com/prometheus/snmp_exporter) {version} tree:
+
+          ```sh
+          patch -p1 < snmp_exporter-{version}-index.patch
+          ```
+          """
+          Path(os.environ["RUNNER_TEMP"], "notes.md").write_text(text.strip() + "\n")
+          PY
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" dist/snmp_exporter-* dist/sha256sums.txt --clobber
+            gh release edit "$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
           else
-            gh release create "$tag" "$asset" --title "$tag" --notes "$notes"
+            gh release create "$VERSION" dist/snmp_exporter-* dist/sha256sums.txt --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
           fi
