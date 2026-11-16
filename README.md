@@ -61,7 +61,7 @@ BuildKit sets `TARGETARCH`. The default is `amd64`.
 
 ## Image from GitHub
 
-Pushes and pull requests to `main` run `make test` and do not publish an image. Pushing a tag such as `v0.31.0` publishes `ghcr.io/<owner>/<repo>:<tag>` and `:latest`. A manual run publishes `ghcr.io/<owner>/<repo>:sha-<commit>` and leaves `:latest` where it is. The image is `linux/amd64` and carries an SBOM. Build provenance is attached to the image in GHCR. A private personal repository cannot also store that attestation on GitHub. A private repository gets a private package; pull it after `docker login ghcr.io`.
+Pushes and pull requests to `main` run `make test` and do not publish an image. Pushing a tag such as `v0.31.0` publishes `ghcr.io/<owner>/<repo>:<tag>` and `:latest`. A manual run publishes `ghcr.io/<owner>/<repo>:sha-<commit>` and leaves `:latest` where it is. The image is `linux/amd64` and carries an SBOM and build provenance in GHCR. A private repository gets a private package; pull it after `docker login ghcr.io`.
 
 ```sh
 git tag v0.31.0
