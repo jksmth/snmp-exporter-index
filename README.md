@@ -54,7 +54,7 @@ The index scrape does not grow with the size of the table. On the 8,192-interfac
 
 ## Other tables
 
-`index` is the table's own instance suffix, not a special case for ifIndex. Any module whose indexes are integers is narrowed the same way. The suffix has to have one component per integer index. A table indexed by a MAC address, an IP address, or a name is left on its walk: those indexes are not a string of integers, and a caller-supplied `42` would not address the row.
+`index` is the table's own instance suffix, not a special case for ifIndex. Any module whose indexes are integers is narrowed the same way. The suffix has to have one component per integer index. A module whose indexes are all addresses or names is scraped unchanged, because `42` does not address those rows.
 
 | What you want | What to pass | Where it already works |
 | --- | --- | --- |
