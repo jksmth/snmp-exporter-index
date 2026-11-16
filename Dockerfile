@@ -6,6 +6,9 @@
 
 ARG SNMP_EXPORTER_VERSION=v0.31.0
 ARG GOLANG_VERSION=1.26.0
+# Declared before the first FROM so a later stage can use it in its FROM.
+# arm v7 is busybox-linux-armv7, which is not Docker's TARGETARCH ("arm").
+ARG BUSYBOX_ARCH=amd64
 
 FROM --platform=$BUILDPLATFORM golang:${GOLANG_VERSION}-bookworm AS build
 ARG SNMP_EXPORTER_VERSION
@@ -33,10 +36,9 @@ RUN set -eu; \
     -ldflags="-s -w -X github.com/prometheus/common/version.Version=${SNMP_EXPORTER_VERSION}-index -X github.com/prometheus/common/version.Revision=index -X github.com/prometheus/common/version.BuildUser=snmp-exporter-index -X github.com/prometheus/common/version.BuildDate=${BUILD_DATE}" \
     -o /out/snmp_exporter .
 
-# Prometheus publishes one busybox repository per architecture. arm v7 is
-# busybox-linux-armv7, which is not Docker's TARGETARCH ("arm"), so the
-# caller passes BUSYBOX_ARCH from release/platforms.txt.
-ARG BUSYBOX_ARCH=amd64
+# Re-import the global ARG. BuildKit only substitutes a FROM variable that
+# was declared before the first stage.
+ARG BUSYBOX_ARCH
 FROM quay.io/prometheus/busybox-linux-${BUSYBOX_ARCH}:latest
 LABEL org.opencontainers.image.title="snmp_exporter"
 LABEL org.opencontainers.image.description="snmp_exporter with an optional index query parameter"

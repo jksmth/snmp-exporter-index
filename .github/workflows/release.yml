@@ -133,6 +133,7 @@ jobs:
     needs: [plan, test]
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include: ${{ fromJson(needs.plan.outputs.include) }}
     permissions:
