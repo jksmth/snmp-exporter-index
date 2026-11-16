@@ -59,6 +59,10 @@ docker build -t snmp-exporter-index:v0.31.0 .
 
 BuildKit sets `TARGETARCH`. The default is `amd64`.
 
+## Image from GitHub
+
+`.github/workflows/image.yml` runs on every push to `main`. It runs `make test`, then pushes a `linux/amd64` image to `ghcr.io/<owner>/<repo>` with tags `latest`, `v0.31.0`, and the commit sha. The workflow's `GITHUB_TOKEN` is enough to publish. A private repository gets a private package; pull it after `docker login ghcr.io`.
+
 ## Moving to a newer upstream release
 
 Set `VERSION` to the new tag and run `make test`. If `patch` stops applying, refresh `patches/0001-index-query-parameter.patch` against that tag. The change is the handler in `main.go` plus `collector/index.go`. The config format and the Prometheus text are untouched, which is what keeps the service in front of it working.
