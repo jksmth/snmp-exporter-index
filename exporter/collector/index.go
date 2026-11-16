@@ -258,3 +258,22 @@ func needsPreviousColumn(typ string) bool {
 	_, ok := combinedTypeMapping[typ]
 	return ok
 }
+
+// instanceSuffixMatches reports whether indexOids is exactly the instance
+// suffix declared by metric. A longer suffix is a different object that sits
+// under the column OID. The collector otherwise keeps only the leading
+// sub-identifiers, so those objects share one label set and Prometheus
+// rejects the scrape.
+//
+// A metric with no indexes is a scalar. Its instance ".0" is not declared as
+// an index, and this check leaves that path alone.
+func instanceSuffixMatches(indexOids []int, metric *config.Metric) bool {
+	if len(metric.Indexes) == 0 {
+		return true
+	}
+	rest := indexOids
+	for _, index := range metric.Indexes {
+		_, _, rest = indexOidsAsString(rest, index.Type, index.FixedSize, index.Implied, index.EnumValues)
+	}
+	return len(rest) == 0
+}

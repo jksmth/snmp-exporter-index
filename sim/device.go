@@ -42,6 +42,9 @@ const (
 	// Subscriber sessions use a high ifIndex, the way a BRAS does, instead of
 	// packing sessions into 1..N.
 	subscriberBase uint32 = 2_000_000_000
+
+	// dot3StatsDuplexStatus is EtherLike-MIB, indexed by ifIndex.
+	dot3StatsDuplexStatusOID = "1.3.6.1.2.1.10.7.2.1.19"
 )
 
 type iface struct {
@@ -123,12 +126,19 @@ func (d *Device) instances() []object {
 	objs := make([]object, 0, 8+len(columns)*len(d.Ifaces))
 	objs = append(objs, d.scalars()...)
 	for _, col := range columns {
+		// The uap profile does not implement duplex as <column>.<ifIndex>.
+		if d.Profile == "uap" && col.prefix == dot3StatsDuplexStatusOID {
+			continue
+		}
 		prefix := parseOID(col.prefix)
 		for _, iface := range d.Ifaces {
 			id := append(append([]uint32{}, prefix...), iface.Index)
 			name := formatOID(id)
 			objs = append(objs, object{id: id, pdu: gosnmp.SnmpPDU{Name: name, Type: col.ber, Value: col.value(iface)}})
 		}
+	}
+	if d.Profile == "uap" {
+		objs = append(objs, uapDot3()...)
 	}
 	return objs
 }
@@ -217,8 +227,10 @@ func buildIfaces(n int, profile string) ([]iface, error) {
 		return edgeIfaces(n), nil
 	case "subscriber":
 		return subscriberIfaces(n), nil
+	case "uap":
+		return uapIfaces(n)
 	default:
-		return nil, fmt.Errorf("unknown profile %q (core, edge, subscriber)", profile)
+		return nil, fmt.Errorf("unknown profile %q (core, edge, subscriber, uap)", profile)
 	}
 }
 
@@ -372,8 +384,106 @@ func session(index uint32, n int) iface {
 	}
 }
 
+// uapDot3Values are the integers published under dot3StatsDuplexStatus by
+// the uap profile. 1, 2 and 3 are the duplex enum. 0, 64, 7 and 128 are not.
+// Twelve values is the UAT failure: eleven "collected before" errors means
+// twelve samples were folded onto one label set.
+func uapDot3Values() []int {
+	return []int{0, 1, 2, 3, 64, 0, 1, 2, 3, 64, 7, 128}
+}
+
+// uapDot3 is the raw column this profile walks. Every OID is
+// dot3StatsDuplexStatus.1.<n>, a longer suffix than ifIndex. There is no
+// dot3StatsDuplexStatus.<ifIndex>, so a GET of ifIndex 1, 15 or 33 is
+// noSuchInstance. This is the shape that produced the UAT error, not a
+// capture from the access point.
+func uapDot3() []object {
+	prefix := parseOID(dot3StatsDuplexStatusOID + ".1")
+	values := uapDot3Values()
+	objs := make([]object, 0, len(values))
+	for i, value := range values {
+		id := append(append([]uint32{}, prefix...), uint32(i+1))
+		objs = append(objs, object{
+			id: id,
+			pdu: gosnmp.SnmpPDU{
+				Name:  formatOID(id),
+				Type:  gosnmp.Integer,
+				Value: value,
+			},
+		})
+	}
+	return objs
+}
+
+func uapIfaces(n int) ([]iface, error) {
+	if n < 3 {
+		return nil, fmt.Errorf("uap profile needs at least 3 interfaces")
+	}
+	specials := []iface{uapLoopback(), uapAth(), uapBridge()}
+	byIndex := make(map[uint32]iface, len(specials))
+	for _, row := range specials {
+		byIndex[row.Index] = row
+	}
+	out := make([]iface, 0, n)
+	used := make(map[uint32]struct{}, len(specials))
+	for idx := uint32(1); len(out) < n; idx++ {
+		if row, ok := byIndex[idx]; ok {
+			out = append(out, row)
+			used[idx] = struct{}{}
+			continue
+		}
+		pending := 0
+		for _, row := range specials {
+			if _, ok := used[row.Index]; !ok {
+				pending++
+			}
+		}
+		if n-len(out) <= pending {
+			continue
+		}
+		out = append(out, uapVAP(idx))
+	}
+	return out, nil
+}
+
+func uapLoopback() iface {
+	row := loopback()
+	row.Name = "lo"
+	row.Descr = "lo"
+	row.Alias = ""
+	row.Duplex = 0
+	return row
+}
+
+func uapAth() iface {
+	row := ethernet(15, "ath0", 1_000, false)
+	row.Alias = ""
+	row.Duplex = 0
+	return row
+}
+
+func uapBridge() iface {
+	row := ethernet(33, "br-trunk", 1_000, false)
+	row.Alias = ""
+	row.Duplex = 0
+	return row
+}
+
+func uapVAP(index uint32) iface {
+	row := ethernet(index, fmt.Sprintf("wlan%d", index), 1_000, false)
+	row.Alias = ""
+	row.Duplex = 0
+	return row
+}
+
 func pickSample(profile string, ifaces []iface) iface {
 	switch profile {
+	case "uap":
+		for _, row := range ifaces {
+			if row.Name == "ath0" {
+				return row
+			}
+		}
 	case "subscriber":
 		for i := len(ifaces) - 1; i >= 0; i-- {
 			if ifaces[i].Index >= subscriberBase {

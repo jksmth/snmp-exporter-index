@@ -87,13 +87,35 @@ def wire_main(text: str) -> str:
     return text
 
 
+def wire_collector(text: str) -> str:
+    return replace_once(
+        text,
+        "\t\t\tif head.metric != nil {\n"
+        "\t\t\t\t// Found a match.\n"
+        "\t\t\t\tsamples := pduToSamples(oidList[i+1:], &pdu, head.metric, oidToPdu, logger, c.metrics)\n",
+        "\t\t\tif head.metric != nil {\n"
+        "\t\t\t\t// Found a match. A longer suffix is a different object under\n"
+        "\t\t\t\t// this column; keeping the leading sub-identifiers would\n"
+        "\t\t\t\t// collapse those objects onto one label set.\n"
+        "\t\t\t\tif !instanceSuffixMatches(oidList[i+1:], head.metric) {\n"
+        "\t\t\t\t\tlogger.Debug(\"Skipping PDU whose index is longer than the metric\", \"oid\", oid, \"metric\", head.metric.Name)\n"
+        "\t\t\t\t\tbreak\n"
+        "\t\t\t\t}\n"
+        "\t\t\t\tsamples := pduToSamples(oidList[i+1:], &pdu, head.metric, oidToPdu, logger, c.metrics)\n",
+        "pduToSamples",
+    )
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         sys.exit(f"usage: {sys.argv[0]} <snmp_exporter tree>")
     tree = Path(sys.argv[1]).resolve()
     main_go = tree / "main.go"
+    collector_go = tree / "collector" / "collector.go"
     if not main_go.is_file():
         sys.exit(f"apply: {main_go} does not exist")
+    if not collector_go.is_file():
+        sys.exit(f"apply: {collector_go} does not exist")
     for src, dest in COPIES.items():
         source = ROOT / src
         if not source.is_file():
@@ -102,6 +124,7 @@ def main() -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
     main_go.write_text(wire_main(main_go.read_text()))
+    collector_go.write_text(wire_collector(collector_go.read_text()))
 
 
 if __name__ == "__main__":

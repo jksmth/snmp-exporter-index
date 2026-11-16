@@ -28,7 +28,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:11611", "UDP address to answer SNMPv2c on")
 	community := flag.String("community", "public", "SNMPv2c community")
 	n := flag.Int("interfaces", 1024, "how many interfaces to publish")
-	profile := flag.String("profile", "core", "core (router), edge (switch), or subscriber (BRAS)")
+	profile := flag.String("profile", "core", "core (router), edge (switch), subscriber (BRAS), or uap (access point)")
 	rtt := flag.Duration("rtt", 0, "artificial delay before each SNMP response")
 	statsPath := flag.String("stats", "", "write JSON counters to this file after each response")
 	flag.Usage = func() {
@@ -37,7 +37,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Profiles:\n")
 		fmt.Fprintf(os.Stderr, "  core         loopback, 100G ports, aggregate ethernet, then VLAN subinterfaces\n")
 		fmt.Fprintf(os.Stderr, "  edge         a switch: 1G ports, a few VLAN interfaces, one half-duplex port\n")
-		fmt.Fprintf(os.Stderr, "  subscriber   a few uplinks and many demux0.pp0 sessions at a high ifIndex\n\n")
+		fmt.Fprintf(os.Stderr, "  subscriber   a few uplinks and many demux0.pp0 sessions at a high ifIndex\n")
+		fmt.Fprintf(os.Stderr, "  uap          lo, ath0, br-trunk; duplex column has a longer suffix than ifIndex\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()

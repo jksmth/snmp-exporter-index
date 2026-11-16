@@ -25,7 +25,7 @@ $(SIM): sim/main.go sim/agent.go sim/device.go sim/agent_test.go sim/go.mod
 # generated patch round-trips, then load the example module.
 test: $(STAMP)
 	cd sim && go test .
-	cd $(CACHE) && go test ./collector/ -count=1 -timeout 180s -run 'TestIndexSuffixes|TestModuleForIndexes'
+	cd $(CACHE) && go test ./collector/ -count=1 -timeout 180s -run 'TestIndexSuffixes|TestModuleForIndexes|TestInstanceSuffixMatches|TestMalformedDot3'
 	$(MAKE) $(EXPORTER)
 	cp examples/if_index.yml $(CACHE)/if_index.yml
 	cd $(CACHE) && ./snmp_exporter --dry-run --config.file=snmp.yml --config.file=if_index.yml

@@ -13,7 +13,7 @@ rm -rf "$cache"
 git clone --depth 1 --branch "$version" https://github.com/prometheus/snmp_exporter.git "$cache"
 python3 "$root/scripts/apply.py" "$cache"
 
-git -C "$cache" add -- collector/index.go collector/index_test.go index_param.go main.go
+git -C "$cache" add -- collector/index.go collector/index_test.go collector/collector.go index_param.go main.go
 mkdir -p "$root/dist"
 git -C "$cache" -c core.autocrlf=false -c diff.noprefix=false diff --cached --no-ext-diff > "$patch"
 
@@ -21,7 +21,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 git -C "$cache" archive HEAD | tar -x -C "$work"
 patch -p1 --batch --forward -F0 -d "$work" < "$patch"
-for f in collector/index.go collector/index_test.go index_param.go main.go; do
+for f in collector/index.go collector/index_test.go collector/collector.go index_param.go main.go; do
   if ! cmp -s "$cache/$f" "$work/$f"; then
     diff -u "$cache/$f" "$work/$f" || true
     echo "patch does not round-trip for $f" >&2
