@@ -1,0 +1,505 @@
+diff --git a/collector/index.go b/collector/index.go
+new file mode 100644
+index 0000000..d22c95d
+--- /dev/null
++++ b/collector/index.go
+@@ -0,0 +1,182 @@
++// Copyright 2026 The snmp-exporter-index authors
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++// http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package collector
++
++import (
++	"fmt"
++	"regexp"
++	"strings"
++
++	"github.com/prometheus/snmp_exporter/config"
++)
++
++// indexSuffixPattern matches an SNMP instance suffix: "42" or "1.42".
++// Table columns are not contiguous, so a known index is fetched with GET of
++// "<column OID>.<suffix>", not by walking a subtree.
++var indexSuffixPattern = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)*$`)
++
++// IndexSuffixes parses the repeated "index" query parameter.
++// Values may be repeated or comma-separated. Blank values are ignored so an
++// empty form field does not change the scrape. The result is nil when the
++// parameter is absent or blank.
++func IndexSuffixes(raw []string) ([]string, error) {
++	if len(raw) == 0 {
++		return nil, nil
++	}
++	seen := make(map[string]struct{})
++	var suffixes []string
++	for _, part := range raw {
++		for _, suffix := range strings.Split(part, ",") {
++			suffix = strings.TrimSpace(suffix)
++			if suffix == "" {
++				continue
++			}
++			if !indexSuffixPattern.MatchString(suffix) {
++				return nil, fmt.Errorf("'index' must be a dotted sequence of non-negative integers, got %q", suffix)
++			}
++			if _, ok := seen[suffix]; ok {
++				continue
++			}
++			seen[suffix] = struct{}{}
++			suffixes = append(suffixes, suffix)
++		}
++	}
++	return suffixes, nil
++}
++
++// ModuleForIndexes returns a module that fetches suffixes with SNMP GET.
++//
++// applied is false, and src is returned unchanged, when no columnar metric
++// has the same number of integer indexes as a suffix. Scalar modules such as
++// "system" therefore keep a normal scrape when the request also names an
++// interface index.
++//
++// When a metric matches, walks and dynamic filters are dropped. Scalars are
++// fetched at oid.0. Lookup columns that use the whole index, and the previous
++// column for types that encode a sibling, are fetched with the same suffix so
++// the Prometheus labels still resolve. Metrics whose index shape does not
++// match are omitted from that scrape.
++//
++// src is never mutated. The loaded configuration is shared across requests.
++func ModuleForIndexes(src *config.Module, suffixes []string) (*config.Module, bool, error) {
++	if len(suffixes) == 0 {
++		return src, false, nil
++	}
++	for _, suffix := range suffixes {
++		if !indexSuffixPattern.MatchString(suffix) {
++			return nil, false, fmt.Errorf("'index' must be a dotted sequence of non-negative integers, got %q", suffix)
++		}
++	}
++
++	byWidth := make(map[int][]string, len(suffixes))
++	for _, suffix := range suffixes {
++		width := strings.Count(suffix, ".") + 1
++		byWidth[width] = append(byWidth[width], suffix)
++	}
++
++	matched := 0
++	for _, metric := range src.Metrics {
++		width, ok := integerIndexWidth(metric)
++		if !ok {
++			continue
++		}
++		if len(byWidth[width]) > 0 {
++			matched++
++		}
++	}
++	if matched == 0 {
++		return src, false, nil
++	}
++
++	dst := *src
++	if src.WalkParams.Retries != nil {
++		retries := *src.WalkParams.Retries
++		dst.WalkParams.Retries = &retries
++	}
++
++	seen := make(map[string]struct{})
++	gets := make([]string, 0, len(src.Get)+len(src.Metrics)*len(suffixes))
++	add := func(oid string) {
++		if oid == "" {
++			return
++		}
++		if _, ok := seen[oid]; ok {
++			return
++		}
++		seen[oid] = struct{}{}
++		gets = append(gets, oid)
++	}
++	for _, oid := range src.Get {
++		add(oid)
++	}
++	for _, metric := range src.Metrics {
++		if metric.Oid == "" {
++			continue
++		}
++		width, ok := integerIndexWidth(metric)
++		if !ok {
++			if len(metric.Indexes) == 0 {
++				add(scalarOID(metric.Oid))
++			}
++			continue
++		}
++		for _, suffix := range byWidth[width] {
++			add(metric.Oid + "." + suffix)
++			for _, lookup := range metric.Lookups {
++				if lookup.Oid == "" || len(lookup.Labels) != len(metric.Indexes) {
++					continue
++				}
++				add(lookup.Oid + "." + suffix)
++			}
++			if needsPreviousColumn(metric.Type) {
++				add(getPrevOid(metric.Oid) + "." + suffix)
++			}
++		}
++	}
++
++	dst.Get = gets
++	dst.Walk = nil
++	dst.Filters = nil
++	return &dst, true, nil
++}
++
++func integerIndexWidth(metric *config.Metric) (int, bool) {
++	if len(metric.Indexes) == 0 {
++		return 0, false
++	}
++	for _, index := range metric.Indexes {
++		switch index.Type {
++		case "Integer", "Integer32", "gauge", "counter":
++		default:
++			return 0, false
++		}
++	}
++	return len(metric.Indexes), true
++}
++
++func scalarOID(oid string) string {
++	if strings.HasSuffix(oid, ".0") {
++		return oid
++	}
++	return oid + ".0"
++}
++
++func needsPreviousColumn(typ string) bool {
++	switch typ {
++	case "InetAddress", "InetAddressMissingSize", "LldpPortId":
++		return true
++	default:
++		return false
++	}
++}
+diff --git a/collector/index_test.go b/collector/index_test.go
+new file mode 100644
+index 0000000..8e4404b
+--- /dev/null
++++ b/collector/index_test.go
+@@ -0,0 +1,252 @@
++// Copyright 2026 The snmp-exporter-index authors
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++// http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package collector
++
++import (
++	"reflect"
++	"testing"
++
++	"github.com/prometheus/snmp_exporter/config"
++)
++
++func TestIndexSuffixes(t *testing.T) {
++	cases := []struct {
++		name    string
++		raw     []string
++		want    []string
++		wantErr bool
++	}{
++		{name: "absent", raw: nil, want: nil},
++		{name: "blank", raw: []string{"", "  ", ","}, want: nil},
++		{name: "repeated and comma", raw: []string{"42, 43", "42", "7.9"}, want: []string{"42", "43", "7.9"}},
++		{name: "trimmed", raw: []string{" 42 "}, want: []string{"42"}},
++		{name: "negative", raw: []string{"-1"}, wantErr: true},
++		{name: "trailing dot", raw: []string{"42."}, wantErr: true},
++		{name: "name", raw: []string{"eth0"}, wantErr: true},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			got, err := IndexSuffixes(tc.raw)
++			if tc.wantErr {
++				if err == nil {
++					t.Fatalf("expected error, got %v", got)
++				}
++				return
++			}
++			if err != nil {
++				t.Fatal(err)
++			}
++			if !reflect.DeepEqual(got, tc.want) {
++				t.Fatalf("got %v, want %v", got, tc.want)
++			}
++		})
++	}
++}
++
++func ifIndexMetric(name, oid, typ string) *config.Metric {
++	return &config.Metric{
++		Name: name,
++		Oid:  oid,
++		Type: typ,
++		Indexes: []*config.Index{{
++			Labelname: "ifIndex",
++			Type:      "gauge",
++		}},
++		Lookups: []*config.Lookup{{
++			Labels:    []string{"ifIndex"},
++			Labelname: "ifName",
++			Oid:       "1.3.6.1.2.1.31.1.1.1.1",
++			Type:      "DisplayString",
++		}},
++	}
++}
++
++func TestModuleForIndexesInterfaceRow(t *testing.T) {
++	retries := 3
++	src := &config.Module{
++		Walk: []string{"1.3.6.1.2.1.2", "1.3.6.1.2.1.31.1.1"},
++		Get:  make([]string, 1, 8),
++		WalkParams: config.WalkParams{
++			Retries: &retries,
++		},
++		Filters: []config.DynamicFilter{{
++			Oid:     "1.3.6.1.2.1.2.2.1.7",
++			Targets: []string{"1.3.6.1.2.1.2.2.1.8"},
++			Values:  []string{"1"},
++		}},
++		Metrics: []*config.Metric{
++			{Name: "ifNumber", Oid: "1.3.6.1.2.1.2.1", Type: "gauge"},
++			{Name: "sysUpTime", Oid: "1.3.6.1.2.1.1.3.0", Type: "gauge"},
++			ifIndexMetric("ifDescr", "1.3.6.1.2.1.2.2.1.2", "DisplayString"),
++			ifIndexMetric("ifHCInOctets", "1.3.6.1.2.1.31.1.1.1.6", "counter"),
++			ifIndexMetric("ifName", "1.3.6.1.2.1.31.1.1.1.1", "DisplayString"),
++			{
++				Name: "ifStackStatus",
++				Oid:  "1.3.6.1.2.1.31.1.2.1.3",
++				Type: "gauge",
++				Indexes: []*config.Index{
++					{Labelname: "ifStackHigherLayer", Type: "gauge"},
++					{Labelname: "ifStackLowerLayer", Type: "gauge"},
++				},
++			},
++		},
++	}
++	src.Get[0] = "1.2.3.0"
++
++	dst, applied, err := ModuleForIndexes(src, []string{"42", "43"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !applied {
++		t.Fatal("expected the interface metrics to match")
++	}
++	// Suffixes are applied per metric, and a lookup OID that is also a metric
++	// is fetched once.
++	want := []string{
++		"1.2.3.0",
++		"1.3.6.1.2.1.2.1.0",
++		"1.3.6.1.2.1.1.3.0",
++		"1.3.6.1.2.1.2.2.1.2.42",
++		"1.3.6.1.2.1.31.1.1.1.1.42",
++		"1.3.6.1.2.1.2.2.1.2.43",
++		"1.3.6.1.2.1.31.1.1.1.1.43",
++		"1.3.6.1.2.1.31.1.1.1.6.42",
++		"1.3.6.1.2.1.31.1.1.1.6.43",
++	}
++	if !reflect.DeepEqual(dst.Get, want) {
++		t.Fatalf("gets:\n got %v\nwant %v", dst.Get, want)
++	}
++	if len(dst.Walk) != 0 || len(dst.Filters) != 0 {
++		t.Fatalf("scoped module still has walks %v or filters %v", dst.Walk, dst.Filters)
++	}
++	for _, oid := range dst.Get {
++		if oid == "1.3.6.1.2.1.31.1.2.1.3.42" || oid == "1.3.6.1.2.1.2" {
++			t.Fatalf("unexpected oid %s", oid)
++		}
++	}
++	if dst.WalkParams.Retries == src.WalkParams.Retries {
++		t.Fatal("retries pointer is shared with the loaded module")
++	}
++	if *dst.WalkParams.Retries != 3 {
++		t.Fatalf("retries = %d", *dst.WalkParams.Retries)
++	}
++
++	if len(src.Walk) != 2 || src.Walk[0] != "1.3.6.1.2.1.2" {
++		t.Fatalf("source walks mutated: %v", src.Walk)
++	}
++	if len(src.Get) != 1 || cap(src.Get) != 8 || src.Get[0] != "1.2.3.0" {
++		t.Fatalf("source gets mutated: %v cap %d", src.Get, cap(src.Get))
++	}
++	if len(src.Filters) != 1 {
++		t.Fatal("source filters mutated")
++	}
++}
++
++func TestModuleForIndexesLeavesUnrelatedModule(t *testing.T) {
++	src := &config.Module{
++		Walk: []string{"1.3.6.1.2.1.1"},
++		Metrics: []*config.Metric{
++			{Name: "sysUpTime", Oid: "1.3.6.1.2.1.1.3", Type: "gauge"},
++		},
++	}
++	dst, applied, err := ModuleForIndexes(src, []string{"42"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if applied || dst != src {
++		t.Fatalf("scalar module should be reused unchanged, applied=%v", applied)
++	}
++
++	compound := &config.Module{
++		Walk: []string{"1.3.6.1.2.1.31.1.2"},
++		Metrics: []*config.Metric{{
++			Name: "ifStackStatus",
++			Oid:  "1.3.6.1.2.1.31.1.2.1.3",
++			Type: "gauge",
++			Indexes: []*config.Index{
++				{Labelname: "ifStackHigherLayer", Type: "gauge"},
++				{Labelname: "ifStackLowerLayer", Type: "gauge"},
++			},
++		}},
++	}
++	dst, applied, err = ModuleForIndexes(compound, []string{"42"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if applied || dst != compound {
++		t.Fatal("a single integer suffix must not rewrite a two-index table")
++	}
++
++	dst, applied, err = ModuleForIndexes(compound, []string{"1.2"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !applied {
++		t.Fatal("expected the compound index to match")
++	}
++	want := []string{"1.3.6.1.2.1.31.1.2.1.3.1.2"}
++	if !reflect.DeepEqual(dst.Get, want) {
++		t.Fatalf("got %v", dst.Get)
++	}
++}
++
++func TestModuleForIndexesAddressTypeColumn(t *testing.T) {
++	src := &config.Module{
++		Metrics: []*config.Metric{{
++			Name: "ipAdEntAddr",
++			Oid:  "1.3.6.1.2.1.4.20.1.1",
++			Type: "InetAddress",
++			Indexes: []*config.Index{{
++				Labelname: "ipAdEntIfIndex",
++				Type:      "Integer32",
++			}},
++			Lookups: []*config.Lookup{
++				{
++					Labels:    []string{"ipAdEntIfIndex"},
++					Labelname: "ifDescr",
++					Oid:       "1.3.6.1.2.1.2.2.1.2",
++				},
++				{
++					Labels:    []string{"ipAdEntIfIndex", "other"},
++					Labelname: "partial",
++					Oid:       "1.2.3.4.5",
++				},
++			},
++		}},
++	}
++	dst, applied, err := ModuleForIndexes(src, []string{"42"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !applied {
++		t.Fatal("expected a match")
++	}
++	want := []string{
++		"1.3.6.1.2.1.4.20.1.1.42",
++		"1.3.6.1.2.1.2.2.1.2.42",
++		"1.3.6.1.2.1.4.20.1.0.42",
++	}
++	if !reflect.DeepEqual(dst.Get, want) {
++		t.Fatalf("got %v, want %v", dst.Get, want)
++	}
++}
++
++func TestModuleForIndexesRejectsBadSuffix(t *testing.T) {
++	src := &config.Module{
++		Metrics: []*config.Metric{ifIndexMetric("ifDescr", "1.3.6.1.2.1.2.2.1.2", "DisplayString")},
++	}
++	if _, _, err := ModuleForIndexes(src, []string{"eth0"}); err == nil {
++		t.Fatal("expected an error")
++	}
++}
+diff --git a/main.go b/main.go
+index 38d96f3..be0d993 100644
+--- a/main.go
++++ b/main.go
+@@ -156,6 +156,12 @@ func handler(w http.ResponseWriter, r *http.Request, logger *slog.Logger, export
+ 		snmpRequestErrors.Inc()
+ 		return
+ 	}
++	indexes, err := collector.IndexSuffixes(query["index"])
++	if err != nil {
++		http.Error(w, err.Error(), http.StatusBadRequest)
++		snmpRequestErrors.Inc()
++		return
++	}
+ 	sc.mu.RLock()
+ 	auth, authOk := sc.C.Auths[authName]
+ 	if !authOk {
+@@ -173,10 +179,26 @@ func handler(w http.ResponseWriter, r *http.Request, logger *slog.Logger, export
+ 			snmpRequestErrors.Inc()
+ 			return
+ 		}
+-		nmodules = append(nmodules, collector.NewNamedModule(m, module))
++		moduleForScrape := module
++		if len(indexes) > 0 {
++			rewritten, applied, err := collector.ModuleForIndexes(module, indexes)
++			if err != nil {
++				sc.mu.RUnlock()
++				http.Error(w, fmt.Sprintf("module %q: %s", m, err), http.StatusBadRequest)
++				snmpRequestErrors.Inc()
++				return
++			}
++			if applied {
++				moduleForScrape = rewritten
++			}
++		}
++		nmodules = append(nmodules, collector.NewNamedModule(m, moduleForScrape))
+ 	}
+ 	sc.mu.RUnlock()
+ 	logger = logger.With("auth", authName, "target", target)
++	if len(indexes) > 0 {
++		logger = logger.With("index", strings.Join(indexes, ","))
++	}
+ 	registry := prometheus.NewRegistry()
+ 	c := collector.New(r.Context(), target, authName, snmpContext, snmpEngineID, auth, nmodules, logger, exporterMetrics, *concurrency, debug)
+ 	registry.MustRegister(c)
+@@ -365,6 +387,13 @@ func main() {
+ 						Placeholder: "module",
+ 						Value:       "if_mib",
+ 					},
++					{
++						Label:       "Index",
++						Type:        "text",
++						Name:        "index",
++						Placeholder: "ifIndex, optional",
++						Value:       "",
++					},
+ 				},
+ 			},
+ 			Links: []web.LandingLinks{
