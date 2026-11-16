@@ -16,7 +16,11 @@ Leave `index` off and the scrape walks the module the way upstream does. The sam
 
 ## Why this stays a patch
 
-prometheus/snmp_exporter treats the rows a module scrapes as configuration. In [issue 131](https://github.com/prometheus/snmp_exporter/issues/131), in March 2017, Brian Brazil declined a request that would pass indexes along with the target: "That's not something that I'm going to accept as modules should be static." [Issue 176](https://github.com/prometheus/snmp_exporter/issues/176) was closed as the same question. What landed afterwards is a static `get:` list in the module, so a config file can name exact OIDs. Choosing the row on the scrape URL is the part that was refused. This repository keeps that parameter on an otherwise unchanged exporter, and it is not offered upstream as a pull request.
+prometheus/snmp_exporter treats the rows a module scrapes as configuration. [Issue 131](https://github.com/prometheus/snmp_exporter/issues/131) records the decision on passing indexes with the target:
+
+> That's not something that I'm going to accept as modules should be static.
+
+[Issue 176](https://github.com/prometheus/snmp_exporter/issues/176) was closed as the same question. What landed afterwards is a static `get:` list in the module, so a config file can name exact OIDs. Choosing the row on the scrape URL is the part that was refused. This repository keeps that parameter on an otherwise unchanged exporter, and it is not offered upstream as a pull request.
 
 ## Why
 
@@ -37,7 +41,42 @@ These rows are from `make bench` against the simulator. The 20 ms column is the 
 | Core, 8,192 interfaces | `if_mib` | 13,436 packets, 4m 29s at 20 ms | 2 packets, 40 ms |
 | Core, 8,192 interfaces | `if_index` | 3,608 packets, 1m 12s at 20 ms | 1 packet, 20 ms |
 
+Times are packet count times 20 ms. The walk grows with the table. One index stays two `if_mib` packets.
+
+```mermaid
+flowchart LR
+  W48["48-port walk<br/>80 packets · 1.6 s"] -->|"40× fewer"| One["one if_mib index<br/>2 packets · 40 ms"]
+  W1k["1,024-interface walk<br/>1,681 packets · 33.6 s"] -->|"840× fewer"| One
+  W8k["8,192-interface walk<br/>13,436 packets · 4m 29s"] -->|"6,718× fewer"| One
+```
+
 The index scrape does not grow with the size of the table. On the 8,192-interface core, `if_mib` without `index` returned 335,873 PDUs and about 29 MB of Prometheus text. `index=134` (`ae0.100`) returned 42 PDUs. A subscriber device with sessions at ifIndex 2000008187 is the same shape: one GET, including for an ifIndex that is not a small integer.
+
+## Other tables
+
+`index` is the table's own instance suffix, not a special case for ifIndex. Any module whose indexes are integers is narrowed the same way. The suffix has to have one component per integer index. A table indexed by a MAC address, an IP address, or a name is left on its walk: those indexes are not a string of integers, and a caller-supplied `42` would not address the row.
+
+| What you want | What to pass | Where it already works |
+| --- | --- | --- |
+| One interface, or a list of them | `index=42` or `index=1,3,10-20` | `if_mib`, and `examples/if_index.yml` |
+| The IPv4 row for that same interface | `index=42` | `ip_mib`. `ipv4InterfaceTable` is indexed by ifIndex |
+| One chassis component | `index=5` | `cisco_device` rows indexed by `entPhysicalIndex`: power, sensors |
+| A memory pool on that component | `index=5.1` | `cisco_device` `cempMemPool*`, indexed by `entPhysicalIndex` then `cempMemPoolIndex` |
+| Junos operating table, four integer levels | `index=1.2.1.0` | `juniper` `jnxOperating*`, in the order contents, L1, L2, L3 |
+
+`entPhysicalContainedIn` is a column on the component row, not another index component. The containment tree is that value: read it, then request `index` of the parent it names. `ifStack` is the same idea with two ifIndexes, `index=1.42`.
+
+Once any metric in the module matches, the walks are dropped. Tables in that module whose index is not integers, such as `juniper`'s subscriber counter indexed by a name, are omitted from that scrape.
+
+A few tables people group with "the interface" are a different index, so `index=42` does not mean ifIndex 42 there:
+
+- ARP (`ipNetToMediaTable`) is ifIndex plus the address.
+- A MAC forwarding entry is the MAC, and a VLAN-qualified one is VLAN id plus the MAC.
+- A BGP peer is the peer address. Cisco's newer peer table adds address type and length in front of that address.
+- A VLAN row is often the VLAN id. `index=100` on that table is VLAN 100.
+- `cisco_device` also has image and CPU tables indexed by their own integers. `index=3` on that whole module asks for component 3, image 3, and CPU 3 together, because every one-integer metric matches. Split those into their own modules when the numbers mean different things.
+
+Stock `snmp.yml` has no BGP, ARP, or bridge module. Generating one does not need a change here when the index is integers. An address index stays a walk, or a static `get:` of the exact OID.
 
 ## Smaller module
 
