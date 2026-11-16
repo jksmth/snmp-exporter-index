@@ -1,22 +1,59 @@
 VERSION ?= v0.31.0
 IMAGE ?= snmp-exporter-index:$(VERSION)
 CACHE := .cache/snmp_exporter
+STAMP := $(CACHE)/.stamp
+PATCH := dist/snmp_exporter-$(VERSION)-index.patch
+SIM := .cache/ifsim
+EXPORTER := $(CACHE)/snmp_exporter
 
-.PHONY: test image
+.PHONY: test patch image bench bench-check clean
 
-# Apply the patch to a clean upstream tree, run the index tests, and load the
-# example module beside upstream snmp.yml.
-test:
-	rm -rf $(CACHE)
-	git clone --depth 1 --branch $(VERSION) https://github.com/prometheus/snmp_exporter.git $(CACHE)
-	patch -p1 --batch --forward -d $(CACHE) < patches/0001-index-query-parameter.patch
+$(STAMP): exporter/collector/index.go exporter/collector/index_test.go exporter/index_param.go scripts/apply.py scripts/rebuild.sh
+	VERSION=$(VERSION) CACHE=$(CACHE) scripts/rebuild.sh
+	mkdir -p $(CACHE)
+	touch $(STAMP)
+
+$(EXPORTER): $(STAMP)
+	cd $(CACHE) && CGO_ENABLED=0 go build -o snmp_exporter .
+
+$(SIM): sim/main.go sim/agent.go sim/device.go sim/agent_test.go sim/go.mod
+	mkdir -p .cache
+	cd sim && go build -o ../$(SIM) .
+
+# Unit-test the simulator, apply the source to a clean upstream tree, prove the
+# generated patch round-trips, then load the example module.
+test: $(STAMP)
+	cd sim && go test .
 	cd $(CACHE) && go test ./collector/ -count=1 -timeout 180s -run 'TestIndexSuffixes|TestModuleForIndexes'
-	cd $(CACHE) && CGO_ENABLED=0 go build -o snmp_exporter_index .
+	$(MAKE) $(EXPORTER)
 	cp examples/if_index.yml $(CACHE)/if_index.yml
-	cd $(CACHE) && ./snmp_exporter_index --dry-run --config.file=snmp.yml --config.file=if_index.yml
+	cd $(CACHE) && ./snmp_exporter --dry-run --config.file=snmp.yml --config.file=if_index.yml
+
+# Write dist/snmp_exporter-$(VERSION)-index.patch from the Go under exporter/.
+patch:
+	rm -f $(STAMP)
+	$(MAKE) $(STAMP)
+	@test -f $(PATCH)
+	@echo $(PATCH)
 
 image:
 	docker build \
 		--build-arg SNMP_EXPORTER_VERSION=$(VERSION) \
 		--build-arg BUILD_DATE=$$(date -u +%Y-%m-%dT%H:%M:%SZ) \
 		-t $(IMAGE) .
+
+# A short walk-versus-index check. Used in CI.
+bench-check: $(EXPORTER) $(SIM)
+	python3 bench/run.py --check --counts 32,256 --edge 0 --subscriber 0 \
+		--exporter $(EXPORTER) --sim $(SIM) \
+		--snmp-yml $(CACHE)/snmp.yml --if-index examples/if_index.yml
+
+# The published measurement: a switch, a core, and a subscriber device.
+bench: $(EXPORTER) $(SIM)
+	python3 bench/run.py --counts 1024,8192 --edge 48 --subscriber 8192 \
+		--write bench/RESULTS.md --sample bench/sample_if_index.prom \
+		--exporter $(EXPORTER) --sim $(SIM) \
+		--snmp-yml $(CACHE)/snmp.yml --if-index examples/if_index.yml
+
+clean:
+	rm -rf .cache dist

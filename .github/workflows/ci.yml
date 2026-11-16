@@ -20,5 +20,8 @@ jobs:
           go-version: "1.26.0"
           cache: false
 
-      - name: Apply the patch and load the example module
+      - name: Test the source, the generated patch, and the example module
         run: make test
+
+      - name: Walk a simulated switch and fetch one interface
+        run: make bench-check

@@ -19,17 +19,25 @@ jobs:
           go-version: "1.26.0"
           cache: false
 
-      - name: Apply the patch and load the example module
+      - name: Test the source, the generated patch, and the example module
         run: make test
+
+      - name: Walk a simulated switch and fetch one interface
+        run: make bench-check
 
   publish:
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Generate the patch from the Go sources
+        env:
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.31.0' }}
+        run: make patch
 
       - name: Image name
         id: image
@@ -71,7 +79,33 @@ jobs:
           sbom: true
           tags: ${{ steps.tags.outputs.list }}
           build-args: |
-            SNMP_EXPORTER_VERSION=v0.31.0
+            SNMP_EXPORTER_VERSION=${{ github.ref_type == 'tag' && github.ref_name || 'v0.31.0' }}
             BUILD_DATE=${{ steps.built.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Attach the patch to the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ github.ref_name }}"
+          asset="dist/snmp_exporter-${tag}-index.patch"
+          notes=$(cat <<EOF
+          snmp_exporter ${tag} with an optional \`index\` query parameter.
+
+          Image: \`ghcr.io/${{ github.repository }}:${tag}\` and \`:latest\` (\`linux/amd64\`).
+
+          Apply the asset to a clean [prometheus/snmp_exporter](https://github.com/prometheus/snmp_exporter) ${tag} tree:
+
+          \`\`\`sh
+          patch -p1 < snmp_exporter-${tag}-index.patch
+          \`\`\`
+          EOF
+          )
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$asset" --clobber
+            gh release edit "$tag" --notes "$notes"
+          else
+            gh release create "$tag" "$asset" --title "$tag" --notes "$notes"
+          fi

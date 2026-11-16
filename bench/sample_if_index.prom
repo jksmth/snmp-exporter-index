@@ -1,0 +1,48 @@
+# HELP dot3StatsDuplexStatus The current duplex mode of the MAC entity. 1 unknown, 2 halfDuplex, 3 fullDuplex. 1.3.6.1.2.1.10.7.2.1.19
+# TYPE dot3StatsDuplexStatus gauge
+dot3StatsDuplexStatus{ifAlias="",ifDescr="ge-0/0/42",ifIndex="44",ifName="ge-0/0/42"} 3
+# HELP ifAdminStatus The desired state of the interface. 1.3.6.1.2.1.2.2.1.7
+# TYPE ifAdminStatus gauge
+ifAdminStatus{ifAlias="",ifDescr="ge-0/0/42",ifIndex="44",ifName="ge-0/0/42"} 1
+# HELP ifAlias This object is an 'alias' name for the interface as specified by a network manager. 1.3.6.1.2.1.31.1.1.1.18
+# TYPE ifAlias gauge
+ifAlias{ifAlias="",ifDescr="ge-0/0/42",ifIndex="44",ifName="ge-0/0/42"} 1
+# HELP ifDescr A textual string containing information about the interface. 1.3.6.1.2.1.2.2.1.2
+# TYPE ifDescr gauge
+ifDescr{ifAlias="",ifDescr="ge-0/0/42",ifIndex="44",ifName="ge-0/0/42"} 1
+# HELP ifHCInOctets The total number of octets received on the interface, including framing characters. 1.3.6.1.2.1.31.1.1.1.6
+# TYPE ifHCInOctets counter
+ifHCInOctets{ifAlias="",ifDescr="ge-0/0/42",ifIndex="44",ifName="ge-0/0/42"} 4.6187344e+07
+# HELP ifHCOutOctets The total number of octets transmitted out of the interface, including framing characters. 1.3.6.1.2.1.31.1.1.1.10
+# TYPE ifHCOutOctets counter
+ifHCOutOctets{ifAlias="",ifDescr="ge-0/0/42",ifIndex="44",ifName="ge-0/0/42"} 4.6177344e+07
+# HELP ifHighSpeed An estimate of the interface's current bandwidth in units of 1,000,000 bits per second. 1.3.6.1.2.1.31.1.1.1.15
+# TYPE ifHighSpeed gauge
+ifHighSpeed{ifAlias="",ifDescr="ge-0/0/42",ifIndex="44",ifName="ge-0/0/42"} 1000
+# HELP ifInOctets The total number of octets received on the interface, including framing characters. 1.3.6.1.2.1.2.2.1.10
+# TYPE ifInOctets counter
+ifInOctets{ifAlias="",ifDescr="ge-0/0/42",ifIndex="44",ifName="ge-0/0/42"} 4.6187344e+07
+# HELP ifName The textual name of the interface. 1.3.6.1.2.1.31.1.1.1.1
+# TYPE ifName gauge
+ifName{ifAlias="",ifDescr="ge-0/0/42",ifIndex="44",ifName="ge-0/0/42"} 1
+# HELP ifOperStatus The current operational state of the interface. 1.3.6.1.2.1.2.2.1.8
+# TYPE ifOperStatus gauge
+ifOperStatus{ifAlias="",ifDescr="ge-0/0/42",ifIndex="44",ifName="ge-0/0/42"} 1
+# HELP ifSpeed An estimate of the interface's current bandwidth in bits per second. 1.3.6.1.2.1.2.2.1.5
+# TYPE ifSpeed gauge
+ifSpeed{ifAlias="",ifDescr="ge-0/0/42",ifIndex="44",ifName="ge-0/0/42"} 1e+09
+# HELP snmp_scrape_duration_seconds Total SNMP time scrape took (walk and processing).
+# TYPE snmp_scrape_duration_seconds gauge
+snmp_scrape_duration_seconds{module="if_index"} 0.000242174
+# HELP snmp_scrape_packets_retried Packets retried for get, bulkget, and walk.
+# TYPE snmp_scrape_packets_retried gauge
+snmp_scrape_packets_retried{module="if_index"} 0
+# HELP snmp_scrape_packets_sent Packets sent for get, bulkget, and walk; including retries.
+# TYPE snmp_scrape_packets_sent gauge
+snmp_scrape_packets_sent{module="if_index"} 1
+# HELP snmp_scrape_pdus_returned PDUs returned from get, bulkget, and walk.
+# TYPE snmp_scrape_pdus_returned gauge
+snmp_scrape_pdus_returned{module="if_index"} 11
+# HELP snmp_scrape_walk_duration_seconds Time SNMP walk/bulkwalk took.
+# TYPE snmp_scrape_walk_duration_seconds gauge
+snmp_scrape_walk_duration_seconds{module="if_index"} 0.000176431
