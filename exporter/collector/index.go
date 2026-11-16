@@ -16,10 +16,16 @@ package collector
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/prometheus/snmp_exporter/config"
 )
+
+// maxIndexSuffixes is the most rows one scrape may name. if_mib is about
+// 42 GETs per index and the exporter puts 25 OIDs in a packet, so 256
+// indexes is a few hundred packets. The README states this limit.
+const maxIndexSuffixes = 256
 
 // indexSuffixPattern matches an SNMP instance suffix: "42" or "1.42".
 // Table columns are not contiguous, so a known index is fetched with GET of
@@ -27,32 +33,98 @@ import (
 var indexSuffixPattern = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)*$`)
 
 // IndexSuffixes parses the repeated "index" query parameter.
-// Values may be repeated or comma-separated. Blank values are ignored so an
-// empty form field does not change the scrape. The result is nil when the
-// parameter is absent or blank.
+// Values may be repeated, comma-separated, or an inclusive range of one
+// integer ("10-20"). Blank values are ignored so an empty form field does
+// not change the scrape. The result is nil when the parameter is absent or
+// blank. Integer tokens are written without leading zeros.
 func IndexSuffixes(raw []string) ([]string, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
 	seen := make(map[string]struct{})
 	var suffixes []string
+	add := func(suffix string) error {
+		if _, ok := seen[suffix]; ok {
+			return nil
+		}
+		if len(suffixes) == maxIndexSuffixes {
+			return fmt.Errorf("'index' expands to more than %d suffixes", maxIndexSuffixes)
+		}
+		seen[suffix] = struct{}{}
+		suffixes = append(suffixes, suffix)
+		return nil
+	}
 	for _, part := range raw {
-		for _, suffix := range strings.Split(part, ",") {
-			suffix = strings.TrimSpace(suffix)
-			if suffix == "" {
+		for _, token := range strings.Split(part, ",") {
+			token = strings.TrimSpace(token)
+			if token == "" {
 				continue
 			}
-			if !indexSuffixPattern.MatchString(suffix) {
-				return nil, fmt.Errorf("'index' must be a dotted sequence of non-negative integers, got %q", suffix)
+			if err := appendIndexToken(token, add); err != nil {
+				return nil, err
 			}
-			if _, ok := seen[suffix]; ok {
-				continue
-			}
-			seen[suffix] = struct{}{}
-			suffixes = append(suffixes, suffix)
 		}
 	}
 	return suffixes, nil
+}
+
+func appendIndexToken(token string, add func(string) error) error {
+	if strings.Contains(token, "-") {
+		start, end, err := integerRange(token)
+		if err != nil {
+			return err
+		}
+		// A span this wide cannot fit, even when every value is new.
+		if end-start >= uint64(maxIndexSuffixes) {
+			return fmt.Errorf("'index' expands to more than %d suffixes", maxIndexSuffixes)
+		}
+		for n := start; ; n++ {
+			if err := add(strconv.FormatUint(n, 10)); err != nil {
+				return err
+			}
+			if n == end {
+				return nil
+			}
+		}
+	}
+	if !indexSuffixPattern.MatchString(token) {
+		return fmt.Errorf("'index' must be an integer, an inclusive range such as 10-20, or a dotted suffix, got %q", token)
+	}
+	if !strings.Contains(token, ".") {
+		n, err := strconv.ParseUint(token, 10, 64)
+		if err != nil {
+			return fmt.Errorf("'index' must be an integer, an inclusive range such as 10-20, or a dotted suffix, got %q", token)
+		}
+		token = strconv.FormatUint(n, 10)
+	}
+	return add(token)
+}
+
+// integerRange parses "10-20" and "10 - 20". Both ends are included.
+// The low end must be less than or equal to the high end.
+func integerRange(token string) (uint64, uint64, error) {
+	left, right, ok := strings.Cut(token, "-")
+	if !ok || strings.Contains(right, "-") {
+		return 0, 0, badIndexToken(token)
+	}
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" || strings.Contains(left, ".") || strings.Contains(right, ".") {
+		return 0, 0, badIndexToken(token)
+	}
+	start, errStart := strconv.ParseUint(left, 10, 64)
+	end, errEnd := strconv.ParseUint(right, 10, 64)
+	if errStart != nil || errEnd != nil {
+		return 0, 0, badIndexToken(token)
+	}
+	if start > end {
+		return 0, 0, fmt.Errorf("'index' range must run from low to high, got %q", token)
+	}
+	return start, end, nil
+}
+
+func badIndexToken(token string) error {
+	return fmt.Errorf("'index' must be an integer, an inclusive range such as 10-20, or a dotted suffix, got %q", token)
 }
 
 // ModuleForIndexes returns a module that fetches suffixes with SNMP GET.

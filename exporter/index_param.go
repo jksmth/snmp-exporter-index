@@ -66,7 +66,7 @@ func indexLandingInput() web.LandingFormInput {
 		Label:       "Index",
 		Type:        "text",
 		Name:        "index",
-		Placeholder: "ifIndex, optional",
+		Placeholder: "1,3,10-20",
 		Value:       "",
 	}
 }

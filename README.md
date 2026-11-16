@@ -8,7 +8,15 @@ A drop-in build of [prometheus/snmp_exporter](https://github.com/prometheus/snmp
 
 Leave `index` off and the scrape walks the module the way upstream does. The same service that already calls the exporter and parses the text keeps working. Add `index` when the caller already knows which row it wants.
 
-`index` is the instance suffix that follows a column OID, not a name. For IF-MIB and EtherLike-MIB that suffix is the ifIndex. It is a dotted sequence of integers, so a table with two integer indexes is `index=1.42`. Several rows can be named in one scrape, as `index=42&index=43` or `index=42,43`. An empty value is ignored. Anything else is HTTP 400.
+```text
+/snmp?target=192.0.2.1&auth=public_v2&module=if_mib&index=1,3,6,10-20,1003
+```
+
+`index` is the instance suffix that follows a column OID, not a name. For IF-MIB and EtherLike-MIB that suffix is the ifIndex. A dotted suffix addresses a table with more than one integer index, such as `index=1.42`. Several rows go in one scrape as a comma-separated list, repeated `index` parameters, or an inclusive range. `10-20` is 10 through 20. The low end comes first: `20-10` and a range inside a dotted suffix (`1.10-1.20`) are HTTP 400. One scrape may name at most 256 suffixes. if_mib is about 42 GETs per index, 25 OIDs to a packet, so 256 indexes is a few hundred packets. A longer request is HTTP 400. An empty value is ignored. A hole in a range is still requested, the device answers noSuchInstance, and that row is absent from the text. A range fits ports numbered 1–48. Sessions numbered around 2000000000 stay a list.
+
+## Why this stays a patch
+
+prometheus/snmp_exporter treats the rows a module scrapes as configuration. In [issue 131](https://github.com/prometheus/snmp_exporter/issues/131), in March 2017, Brian Brazil declined a request that would pass indexes along with the target: "That's not something that I'm going to accept as modules should be static." [Issue 176](https://github.com/prometheus/snmp_exporter/issues/176) was closed as the same question. What landed afterwards is a static `get:` list in the module, so a config file can name exact OIDs. Choosing the row on the scrape URL is the part that was refused. This repository keeps that parameter on an otherwise unchanged exporter, and it is not offered upstream as a pull request.
 
 ## Why
 

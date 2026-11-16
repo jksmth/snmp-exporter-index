@@ -31,7 +31,14 @@ func TestIndexSuffixes(t *testing.T) {
 		{name: "blank", raw: []string{"", "  ", ","}, want: nil},
 		{name: "repeated and comma", raw: []string{"42, 43", "42", "7.9"}, want: []string{"42", "43", "7.9"}},
 		{name: "trimmed", raw: []string{" 42 "}, want: []string{"42"}},
+		{name: "list and range", raw: []string{"1,3,6,10-12,1003"}, want: []string{"1", "3", "6", "10", "11", "12", "1003"}},
+		{name: "range spaces and duplicates", raw: []string{"10 - 12, 11", "12"}, want: []string{"10", "11", "12"}},
+		{name: "leading zeros", raw: []string{"007,010-012"}, want: []string{"7", "10", "11", "12"}},
+		{name: "single point range", raw: []string{"10-10"}, want: []string{"10"}},
 		{name: "negative", raw: []string{"-1"}, wantErr: true},
+		{name: "descending", raw: []string{"20-10"}, wantErr: true},
+		{name: "open range", raw: []string{"10-"}, wantErr: true},
+		{name: "dotted range", raw: []string{"1.10-1.20"}, wantErr: true},
 		{name: "trailing dot", raw: []string{"42."}, wantErr: true},
 		{name: "name", raw: []string{"eth0"}, wantErr: true},
 	}
@@ -51,6 +58,29 @@ func TestIndexSuffixes(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestIndexSuffixesCap(t *testing.T) {
+	got, err := IndexSuffixes([]string{"1-256"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != maxIndexSuffixes || got[0] != "1" || got[len(got)-1] != "256" {
+		t.Fatalf("got len %d first %q last %q", len(got), got[0], got[len(got)-1])
+	}
+	if _, err := IndexSuffixes([]string{"1-257"}); err == nil {
+		t.Fatal("expected a range past the cap to fail")
+	}
+	got, err = IndexSuffixes([]string{"1-200", "150-256"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != maxIndexSuffixes || got[0] != "1" || got[len(got)-1] != "256" {
+		t.Fatalf("overlapping ranges: len %d first %q last %q", len(got), got[0], got[len(got)-1])
+	}
+	if _, err := IndexSuffixes([]string{"1-200", "150-257"}); err == nil {
+		t.Fatal("expected the overlapping range past the cap to fail")
 	}
 }
 

@@ -2,6 +2,8 @@
 
 The change to snmp_exporter is the Go under `exporter/`. `scripts/apply.py` copies those files onto a clean upstream tree and wires three call sites in `main.go`. `make patch` clones the upstream tag, runs that, and writes `dist/snmp_exporter-<version>-index.patch`. The patch is a build product. Edit the Go, then regenerate it.
 
+Do not open an upstream pull request for the index parameter. prometheus/snmp_exporter declined request-time index selection so that modules stay static ([issue 131](https://github.com/prometheus/snmp_exporter/issues/131)). The README records that decision.
+
 `scripts/apply.py` matches snmp_exporter v0.31.0. A newer tag that moves the handler or the landing page fails the apply with the anchor named. Update the anchor, keep the behavior in `exporter/`, and run `make test`.
 
 ```sh
