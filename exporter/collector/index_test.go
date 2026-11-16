@@ -242,6 +242,41 @@ func TestModuleForIndexesAddressTypeColumn(t *testing.T) {
 	}
 }
 
+func TestModuleForIndexesFetchesSiblingColumn(t *testing.T) {
+	if len(combinedTypeMapping) == 0 {
+		t.Fatal("combinedTypeMapping is empty")
+	}
+	for typ := range combinedTypeMapping {
+		t.Run(typ, func(t *testing.T) {
+			src := &config.Module{
+				Metrics: []*config.Metric{{
+					Name: "value",
+					Oid:  "1.3.6.1.2.1.4.20.1.1",
+					Type: typ,
+					Indexes: []*config.Index{{
+						Labelname: "idx",
+						Type:      "gauge",
+					}},
+				}},
+			}
+			dst, applied, err := ModuleForIndexes(src, []string{"42"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !applied {
+				t.Fatal("expected a match")
+			}
+			const sibling = "1.3.6.1.2.1.4.20.1.0.42"
+			for _, oid := range dst.Get {
+				if oid == sibling {
+					return
+				}
+			}
+			t.Fatalf("GET list %v missing sibling %s", dst.Get, sibling)
+		})
+	}
+}
+
 func TestModuleForIndexesRejectsBadSuffix(t *testing.T) {
 	src := &config.Module{
 		Metrics: []*config.Metric{ifIndexMetric("ifDescr", "1.3.6.1.2.1.2.2.1.2", "DisplayString")},

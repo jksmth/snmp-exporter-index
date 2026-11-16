@@ -172,11 +172,9 @@ func scalarOID(oid string) string {
 	return oid + ".0"
 }
 
+// needsPreviousColumn reports a metric whose SNMP type is carried in the
+// preceding column. combinedTypeMapping is the set the scraper already uses.
 func needsPreviousColumn(typ string) bool {
-	switch typ {
-	case "InetAddress", "InetAddressMissingSize", "LldpPortId":
-		return true
-	default:
-		return false
-	}
+	_, ok := combinedTypeMapping[typ]
+	return ok
 }
