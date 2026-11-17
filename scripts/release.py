@@ -8,6 +8,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PLATFORMS = ROOT / "release" / "platforms.txt"
+# v0.31.0-1 is a rebuild of upstream v0.31.0. A tag with any other suffix
+# is used as the upstream tag itself.
+REVISION = re.compile(r"^(v\d+\.\d+\.\d+)-\d+$")
+
+
+def upstream_version(version: str) -> str:
+    version = version.strip()
+    if not version.startswith("v") or len(version) < 2 or not version[1].isdigit():
+        raise SystemExit(f"refusing version: {version}")
+    match = REVISION.match(version)
+    return match.group(1) if match else version
 
 
 def rows():
@@ -143,8 +155,11 @@ def binaries():
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "upstream":
+        print(upstream_version(sys.argv[2]))
+        return
     if len(sys.argv) != 2 or sys.argv[1] not in {"matrix", "binaries"}:
-        raise SystemExit("usage: release.py matrix|binaries")
+        raise SystemExit("usage: release.py matrix|binaries|upstream <version>")
     if sys.argv[1] == "matrix":
         matrix()
     else:

@@ -170,7 +170,7 @@ patch -p1 < /path/to/snmp_exporter-v0.31.0-index.patch
 
 ## Image and binaries
 
-Pushes and pull requests to `main` run the tests and do not publish. Pushing a tag named for the upstream release, such as `v0.31.0`, publishes `ghcr.io/<owner>/<repo>:<tag>` and `:latest`, and attaches the patch, the binaries, and `sha256sums.txt` to the GitHub release. A manual run publishes `ghcr.io/<owner>/<repo>:sha-<commit>` and leaves `:latest` where it is.
+Pushes and pull requests to `main` run the tests and do not publish. Pushing a tag named for the upstream release, such as `v0.31.0`, publishes `ghcr.io/<owner>/<repo>:<tag>` and `:latest`, and attaches the patch, the binaries, and `sha256sums.txt` to the GitHub release. A later rebuild of that same upstream tag is `v0.31.0-1`, then `v0.31.0-2`. The image and the archives use that name, and `:latest` moves with it. The patch still applies to upstream `v0.31.0`. A manual run publishes `ghcr.io/<owner>/<repo>:sha-<commit>` and leaves `:latest` where it is.
 
 `make image` builds `linux/amd64`. A published image is a manifest for the container platforms in `release/platforms.txt`: `linux/amd64`, `linux/arm64`, `linux/arm/v7`, `linux/ppc64le`, and `linux/s390x`. Each image carries an SBOM and build provenance in the registry. Package visibility follows the repository.
 

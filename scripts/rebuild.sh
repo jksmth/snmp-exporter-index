@@ -4,13 +4,14 @@ set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 version="${VERSION:-v0.31.0}"
+upstream="${UPSTREAM:-$version}"
 cache="${CACHE:-$root/.cache/snmp_exporter}"
 patch="$root/dist/snmp_exporter-${version}-index.patch"
 
 export GIT_TERMINAL_PROMPT=0
 
 rm -rf "$cache"
-git clone --depth 1 --branch "$version" https://github.com/prometheus/snmp_exporter.git "$cache"
+git clone --depth 1 --branch "$upstream" https://github.com/prometheus/snmp_exporter.git "$cache"
 python3 "$root/scripts/apply.py" "$cache"
 
 git -C "$cache" add -- collector/index.go collector/index_test.go collector/raw.go collector/raw_test.go collector/collector.go index_param.go raw.go raw_test.go main.go

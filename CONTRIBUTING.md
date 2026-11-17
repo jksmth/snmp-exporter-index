@@ -1,6 +1,6 @@
 # Contributing
 
-The change to snmp_exporter is the Go under `exporter/`. `scripts/apply.py` copies those files onto a clean upstream tree and wires three call sites in `main.go`. `make patch` clones the upstream tag, runs that, and writes `dist/snmp_exporter-<version>-index.patch`. The patch is a build product. Edit the Go, then regenerate it.
+The change to snmp_exporter is the Go under `exporter/`. `scripts/apply.py` copies those files onto a clean upstream tree and wires the call sites in `main.go`. `make patch` clones the upstream tag, runs that, and writes `dist/snmp_exporter-<version>-index.patch`. The patch is a build product. Edit the Go, then regenerate it.
 
 Do not open an upstream pull request for the index parameter. prometheus/snmp_exporter declined request-time index selection so that modules stay static ([issue 131](https://github.com/prometheus/snmp_exporter/issues/131)). The README records that decision.
 
@@ -15,7 +15,7 @@ make binaries     # dist archives for release/platforms.txt
 make image        # local linux/amd64 image
 ```
 
-`VERSION` selects the upstream tag. The image tag, the patch, and the binaries are that same version.
+`VERSION` selects the upstream tag. The image tag, the patch, and the binaries are that same version. A rebuild tag such as `v0.31.0-1` keeps `UPSTREAM=v0.31.0` for the clone and names the image and the archives `v0.31.0-1`.
 
 `release/platforms.txt` is the list of image architectures and binaries. Container rows use the Prometheus busybox repository for that architecture (`busybox-linux-armv7` for arm v7). Adding a row is enough for the next tag build; the release workflow reads the file.
 
