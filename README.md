@@ -116,6 +116,22 @@ The process prints one JSON line with `sample_index` and `sample_name`, then ans
 
 `make bench` scrapes the simulator with and without `index` and rewrites [bench/RESULTS.md](bench/RESULTS.md). `make bench-check` is the smaller run used in CI (32 and 256 interfaces).
 
+## Raw OIDs
+
+`--snmp.raw-endpoint` enables `/snmp/raw`. The flag is off by default, and the route answers 404 until it is set. The body is text, one varbind per line: OID, type, and value. `noSuchInstance` is a line with no value.
+
+```text
+/snmp/raw?target=192.0.2.1&auth=public_v2&oid=1.3.6.1.2.1.1.1.0&oid=1.3.6.1.2.1.1.3.0
+```
+
+`walk=1` walks the one OID you name. The walk runs until that subtree ends, or until the HTTP client goes away, which is the same rule as `/snmp`. A packet that gets no answer uses the usual 5 second timeout and 3 retries. There is no row cap.
+
+```text
+/snmp/raw?target=192.0.2.1&auth=public_v2&oid=1.3.6.1.2.1.10.7.2.1.19&walk=1
+```
+
+One request may name at most 256 OIDs. `auth` is a name from the config. A `snmp_context` parameter is passed through when the device has one. Community, timeout, and retry are not parameters.
+
 ## Build
 
 ```sh
@@ -137,7 +153,7 @@ docker build -t snmp-exporter-index:v0.31.0 .
 
 | Path | What it is |
 | --- | --- |
-| `exporter/` | The change. `collector/index.go` decides which OIDs to GET, and skips an instance suffix longer than the metric's indexes. `index_param.go` is the HTTP wiring. |
+| `exporter/` | The change. `collector/index.go` decides which OIDs to GET, and skips an instance suffix longer than the metric's indexes. `index_param.go` wires that into `/snmp`. `raw.go` is `/snmp/raw`. |
 | `scripts/apply.py` | Copies that Go onto an upstream tree. |
 | `release/platforms.txt` | Image architectures and release binaries. |
 | `examples/if_index.yml` | The smaller module. Release archives ship it as `if_index.yml` next to the binary. |

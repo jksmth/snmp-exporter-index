@@ -9,7 +9,7 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 .PHONY: test patch image binaries bench bench-check clean
 
-$(STAMP): exporter/collector/index.go exporter/collector/index_test.go exporter/index_param.go scripts/apply.py scripts/rebuild.sh
+$(STAMP): exporter/collector/index.go exporter/collector/index_test.go exporter/collector/raw.go exporter/collector/raw_test.go exporter/index_param.go exporter/raw.go exporter/raw_test.go scripts/apply.py scripts/rebuild.sh
 	VERSION=$(VERSION) CACHE=$(CACHE) scripts/rebuild.sh
 	mkdir -p $(CACHE)
 	touch $(STAMP)
@@ -25,7 +25,8 @@ $(SIM): sim/main.go sim/agent.go sim/device.go sim/agent_test.go sim/go.mod
 # generated patch round-trips, then load the example module.
 test: $(STAMP)
 	cd sim && go test .
-	cd $(CACHE) && go test ./collector/ -count=1 -timeout 180s -run 'TestIndexSuffixes|TestModuleForIndexes|TestInstanceSuffixMatches|TestMalformedDot3'
+	cd $(CACHE) && go test ./collector/ -count=1 -timeout 180s -run 'TestIndexSuffixes|TestModuleForIndexes|TestInstanceSuffixMatches|TestMalformedDot3|TestRaw|TestFormatRaw'
+	cd $(CACHE) && go test -count=1 -timeout 120s -run 'TestRaw' .
 	$(MAKE) $(EXPORTER)
 	cp examples/if_index.yml $(CACHE)/if_index.yml
 	cd $(CACHE) && ./snmp_exporter --dry-run --config.file=snmp.yml --config.file=if_index.yml

@@ -17,7 +17,11 @@ UPSTREAM_VERSION = "v0.31.0"
 COPIES = {
     "exporter/collector/index.go": "collector/index.go",
     "exporter/collector/index_test.go": "collector/index_test.go",
+    "exporter/collector/raw.go": "collector/raw.go",
+    "exporter/collector/raw_test.go": "collector/raw_test.go",
     "exporter/index_param.go": "index_param.go",
+    "exporter/raw.go": "raw.go",
+    "exporter/raw_test.go": "raw_test.go",
 }
 
 
@@ -83,6 +87,19 @@ def wire_main(text: str) -> str:
         "\t\t\t\t\tindexLandingInput(),\n"
         "\t\t\t\t},\n",
         "landing page",
+    )
+    text = replace_once(
+        text,
+        "\thttp.HandleFunc(proberPath, func(w http.ResponseWriter, r *http.Request) {\n"
+        "\t\thandler(w, r, logger, exporterMetrics)\n"
+        "\t})\n",
+        "\thttp.HandleFunc(proberPath, func(w http.ResponseWriter, r *http.Request) {\n"
+        "\t\thandler(w, r, logger, exporterMetrics)\n"
+        "\t})\n"
+        "\thttp.HandleFunc(rawPath, func(w http.ResponseWriter, r *http.Request) {\n"
+        "\t\trawHandler(w, r, logger)\n"
+        "\t})\n",
+        "raw endpoint",
     )
     return text
 

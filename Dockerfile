@@ -1,5 +1,6 @@
 # Drop-in snmp_exporter. Same flags, port, config path, and Prometheus text.
 # A scrape URL may also pass index=<instance suffix>.
+# --snmp.raw-endpoint enables /snmp/raw. It is off unless that flag is set.
 #
 # GOLANG_VERSION is the bootstrap compiler. When upstream go.mod asks for a
 # newer toolchain, the image downloads it.
