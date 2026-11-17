@@ -14,10 +14,21 @@
 package collector
 
 import (
+	"context"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/gosnmp/gosnmp"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/prometheus/snmp_exporter/config"
+	"github.com/prometheus/snmp_exporter/scraper"
 )
 
 func TestIndexSuffixes(t *testing.T) {
@@ -314,4 +325,226 @@ func TestModuleForIndexesRejectsBadSuffix(t *testing.T) {
 	if _, _, err := ModuleForIndexes(src, []string{"eth0"}); err == nil {
 		t.Fatal("expected an error")
 	}
+}
+
+func TestInstanceSuffixMatches(t *testing.T) {
+	one := &config.Metric{Indexes: []*config.Index{{Labelname: "ifIndex", Type: "gauge"}}}
+	two := &config.Metric{Indexes: []*config.Index{
+		{Labelname: "a", Type: "gauge"},
+		{Labelname: "b", Type: "gauge"},
+	}}
+	scalar := &config.Metric{}
+	if !instanceSuffixMatches([]int{15}, one) {
+		t.Fatal("one integer index should match one sub-identifier")
+	}
+	if instanceSuffixMatches([]int{1, 5}, one) {
+		t.Fatal("a longer suffix must not match a one-integer index")
+	}
+	if !instanceSuffixMatches([]int{1, 42}, two) {
+		t.Fatal("two integer indexes should match two sub-identifiers")
+	}
+	if instanceSuffixMatches([]int{1, 42, 0}, two) {
+		t.Fatal("a trailing sub-identifier must not match")
+	}
+	if !instanceSuffixMatches([]int{0}, scalar) {
+		t.Fatal("a scalar keeps its .0 instance")
+	}
+}
+
+func TestMalformedDot3WalkReturnsUniqueSeries(t *testing.T) {
+	module := duplexModule()
+	body := scrapeText(t, module, nil, duplexWalk())
+	duplex := series(body, "dot3StatsDuplexStatus")
+	if len(duplex) != 2 {
+		t.Fatalf("duplex series = %d\n%s", len(duplex), body)
+	}
+	got := map[string]string{}
+	for _, line := range duplex {
+		idx, value := labelAndValue(t, line)
+		got[idx] = value
+	}
+	if got["15"] != "3" || got["33"] != "1" {
+		t.Fatalf("duplex rows = %v", got)
+	}
+	if _, ok := got["1"]; ok {
+		t.Fatalf("ifIndex 1 duplex was emitted from a longer suffix:\n%s", body)
+	}
+	descr := series(body, "ifDescr")
+	if len(descr) != 3 {
+		t.Fatalf("ifDescr series = %d\n%s", len(descr), body)
+	}
+}
+
+func TestMalformedDot3IndexPathStaysExact(t *testing.T) {
+	module, applied, err := ModuleForIndexes(duplexModule(), []string{"1", "15"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !applied || len(module.Walk) != 0 {
+		t.Fatalf("indexed module walks = %v applied = %v", module.Walk, applied)
+	}
+	gets := map[string]gosnmp.SnmpPDU{}
+	for _, idx := range []string{"1", "15"} {
+		name := map[string]string{"1": "lo", "15": "ath0"}[idx]
+		for _, oid := range []string{oidIfDescr, oidIfName, oidIfAlias} {
+			gets[oid+"."+idx] = octetPDU(oid+"."+idx, name)
+		}
+	}
+	gets[oidDuplex+".15"] = integerPDU(oidDuplex+".15", 3)
+	body, mock := scrapeTextWithMock(t, module, gets, nil)
+	if len(mock.CallWalk()) != 0 {
+		t.Fatalf("indexed scrape walked %v", mock.CallWalk())
+	}
+	duplex := series(body, "dot3StatsDuplexStatus")
+	if len(duplex) != 1 {
+		t.Fatalf("duplex series = %d\n%s", len(duplex), body)
+	}
+	idx, value := labelAndValue(t, duplex[0])
+	if idx != "15" || value != "3" {
+		t.Fatalf("duplex = ifIndex %s value %s", idx, value)
+	}
+	names := map[string]string{}
+	for _, line := range series(body, "ifName") {
+		i, _ := labelAndValue(t, line)
+		names[i] = line
+	}
+	if _, ok := names["1"]; !ok {
+		t.Fatalf("indexed scrape dropped ifIndex 1\n%s", body)
+	}
+	if strings.Contains(body, `ifIndex="33"`) {
+		t.Fatalf("indexed scrape returned an index it was not asked for\n%s", body)
+	}
+}
+
+const (
+	oidIfDescr = "1.3.6.1.2.1.2.2.1.2"
+	oidIfName  = "1.3.6.1.2.1.31.1.1.1.1"
+	oidIfAlias = "1.3.6.1.2.1.31.1.1.1.18"
+	oidDuplex  = "1.3.6.1.2.1.10.7.2.1.19"
+)
+
+func duplexModule() *config.Module {
+	indexes := []*config.Index{{Labelname: "ifIndex", Type: "gauge"}}
+	lookups := []*config.Lookup{
+		{Labels: []string{"ifIndex"}, Labelname: "ifAlias", Oid: oidIfAlias, Type: "DisplayString"},
+		{Labels: []string{"ifIndex"}, Labelname: "ifDescr", Oid: oidIfDescr, Type: "DisplayString"},
+		{Labels: []string{"ifIndex"}, Labelname: "ifName", Oid: oidIfName, Type: "DisplayString"},
+	}
+	column := func(name, oid, typ string) *config.Metric {
+		return &config.Metric{Name: name, Oid: oid, Type: typ, Help: name, Indexes: indexes, Lookups: lookups}
+	}
+	return &config.Module{
+		Walk:       []string{oidIfDescr, oidIfName, oidIfAlias, oidDuplex},
+		WalkParams: config.DefaultWalkParams,
+		Metrics: []*config.Metric{
+			column("ifDescr", oidIfDescr, "DisplayString"),
+			column("ifName", oidIfName, "DisplayString"),
+			column("ifAlias", oidIfAlias, "DisplayString"),
+			column("dot3StatsDuplexStatus", oidDuplex, "gauge"),
+		},
+	}
+}
+
+// duplexWalk is the uap table: three real interfaces, twelve duplex OIDs
+// shaped dot3StatsDuplexStatus.1.<n>, and two exact ifIndex rows that a
+// working agent would have returned in the same walk.
+func duplexWalk() map[string][]gosnmp.SnmpPDU {
+	names := []struct {
+		index string
+		name  string
+	}{{"1", "lo"}, {"15", "ath0"}, {"33", "br-trunk"}}
+	walk := map[string][]gosnmp.SnmpPDU{}
+	for _, oid := range []string{oidIfDescr, oidIfName, oidIfAlias} {
+		rows := make([]gosnmp.SnmpPDU, 0, len(names))
+		for _, row := range names {
+			value := row.name
+			if oid == oidIfAlias {
+				value = ""
+			}
+			rows = append(rows, octetPDU(oid+"."+row.index, value))
+		}
+		walk[oid] = rows
+	}
+	values := []int{0, 1, 2, 3, 64, 0, 1, 2, 3, 64, 7, 128}
+	malformed := make([]gosnmp.SnmpPDU, 0, len(values)+2)
+	for i, value := range values {
+		malformed = append(malformed, integerPDU(oidDuplex+".1."+strconv.Itoa(i+1), value))
+	}
+	malformed = append(malformed, integerPDU(oidDuplex+".15", 3), integerPDU(oidDuplex+".33", 1))
+	walk[oidDuplex] = malformed
+	return walk
+}
+
+func octetPDU(oid, value string) gosnmp.SnmpPDU {
+	return gosnmp.SnmpPDU{Name: "." + oid, Type: gosnmp.OctetString, Value: value}
+}
+
+func integerPDU(oid string, value int) gosnmp.SnmpPDU {
+	return gosnmp.SnmpPDU{Name: "." + oid, Type: gosnmp.Integer, Value: value}
+}
+
+type staticScraper struct {
+	c      *Collector
+	module *NamedModule
+	snmp   scraper.SNMPScraper
+}
+
+func (s staticScraper) Describe(ch chan<- *prometheus.Desc) { s.c.Describe(ch) }
+
+func (s staticScraper) Collect(ch chan<- prometheus.Metric) {
+	s.c.collect(ch, slog.New(slog.DiscardHandler), s.snmp, s.module)
+}
+
+func scrapeText(t *testing.T, module *config.Module, get map[string]gosnmp.SnmpPDU, walk map[string][]gosnmp.SnmpPDU) string {
+	t.Helper()
+	body, _ := scrapeTextWithMock(t, module, get, walk)
+	return body
+}
+
+func scrapeTextWithMock(t *testing.T, module *config.Module, get map[string]gosnmp.SnmpPDU, walk map[string][]gosnmp.SnmpPDU) (string, *scraper.MockSNMPScraper) {
+	t.Helper()
+	mock := scraper.NewMockSNMPScraper(get, walk)
+	c := New(context.Background(), "172.30.0.122", "public_v2c", "", "", &config.Auth{Version: 2}, nil, slog.New(slog.DiscardHandler), testMetrics(), 1, false)
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(staticScraper{c: c, module: NewNamedModule("if_index", module), snmp: mock})
+	rr := httptest.NewRecorder()
+	promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/snmp", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d\n%s", rr.Code, rr.Body.String())
+	}
+	return rr.Body.String(), mock
+}
+
+func testMetrics() Metrics {
+	return Metrics{
+		SNMPInflight:          prometheus.NewGauge(prometheus.GaugeOpts{Name: "snmp_request_in_flight"}),
+		SNMPPackets:           prometheus.NewCounter(prometheus.CounterOpts{Name: "snmp_packets_total"}),
+		SNMPRetries:           prometheus.NewCounter(prometheus.CounterOpts{Name: "snmp_packet_retries_total"}),
+		SNMPDuration:          prometheus.NewHistogram(prometheus.HistogramOpts{Name: "snmp_packet_duration_seconds"}),
+		SNMPUnexpectedPduType: prometheus.NewCounter(prometheus.CounterOpts{Name: "snmp_unexpected_pdu_type_total"}),
+	}
+}
+
+func series(body, name string) []string {
+	var lines []string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, name+"{") {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+func labelAndValue(t *testing.T, line string) (string, string) {
+	t.Helper()
+	idx := ""
+	if i := strings.Index(line, `ifIndex="`); i >= 0 {
+		rest := line[i+len(`ifIndex="`):]
+		idx = rest[:strings.Index(rest, `"`)]
+	}
+	fields := strings.Fields(line)
+	if idx == "" || len(fields) < 2 {
+		t.Fatalf("cannot parse %q", line)
+	}
+	return idx, fields[len(fields)-1]
 }

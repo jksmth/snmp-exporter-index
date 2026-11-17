@@ -14,6 +14,7 @@
 package main
 
 import (
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -74,6 +75,25 @@ func TestDeviceShapes(t *testing.T) {
 	}
 	if _, err := NewDevice(1, "chassis"); err == nil {
 		t.Fatal("expected an unknown profile to fail")
+	}
+	if _, err := NewDevice(2, "uap"); err == nil {
+		t.Fatal("expected a uap profile smaller than 3 interfaces to fail")
+	}
+	uap, err := NewDevice(3, "uap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uap.Ifaces[0].Name != "lo" || uap.Ifaces[0].Index != 1 || uap.Ifaces[0].Descr != "lo" {
+		t.Fatalf("uap loopback = %+v", uap.Ifaces[0])
+	}
+	if uap.Ifaces[1].Name != "ath0" || uap.Ifaces[1].Index != 15 {
+		t.Fatalf("uap radio = %+v", uap.Ifaces[1])
+	}
+	if uap.Ifaces[2].Name != "br-trunk" || uap.Ifaces[2].Index != 33 {
+		t.Fatalf("uap bridge = %+v", uap.Ifaces[2])
+	}
+	if uap.Sample.Name != "ath0" {
+		t.Fatalf("uap sample = %s", uap.Sample.Name)
 	}
 }
 
@@ -144,6 +164,59 @@ func TestWalkAndGet(t *testing.T) {
 	}
 	if missing.Variables[0].Type != gosnmp.NoSuchInstance {
 		t.Fatalf("missing instance type = %v", missing.Variables[0].Type)
+	}
+}
+
+func TestUAPDot3Walk(t *testing.T) {
+	dev, err := NewDevice(3, "uap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := &Agent{Device: dev, Community: "public"}
+	if err := agent.Listen("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	defer agent.Close()
+	go agent.Serve()
+
+	client := dial(t, agent.Addr())
+	defer client.Conn.Close()
+
+	pdus, err := client.BulkWalkAll(dot3StatsDuplexStatusOID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := uapDot3Values()
+	if len(pdus) != len(want) {
+		t.Fatalf("duplex walk = %d PDUs, want %d", len(pdus), len(want))
+	}
+	for i, pdu := range pdus {
+		wantName := fmt.Sprintf(".%s.1.%d", dot3StatsDuplexStatusOID, i+1)
+		if pdu.Name != wantName {
+			t.Fatalf("duplex[%d] oid = %s, want %s", i, pdu.Name, wantName)
+		}
+		if got := int(gosnmp.ToBigInt(pdu.Value).Int64()); got != want[i] {
+			t.Fatalf("duplex[%d] = %d, want %d", i, got, want[i])
+		}
+	}
+
+	for _, idx := range []string{"1", "15", "33"} {
+		oid := "." + dot3StatsDuplexStatusOID + "." + idx
+		got, err := client.Get([]string{oid})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Variables[0].Type != gosnmp.NoSuchInstance {
+			t.Fatalf("GET %s type = %v, want noSuchInstance", oid, got.Variables[0].Type)
+		}
+	}
+
+	descr, err := client.Get([]string{".1.3.6.1.2.1.2.2.1.2.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pduString(descr.Variables[0]) != "lo" {
+		t.Fatalf("ifDescr.1 = %q", pduString(descr.Variables[0]))
 	}
 }
 

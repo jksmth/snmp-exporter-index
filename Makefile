@@ -1,4 +1,7 @@
 VERSION ?= v0.31.0
+# A tag such as v0.31.0-1 rebuilds upstream v0.31.0. The default is VERSION,
+# which is also what a plain `make test` clones.
+UPSTREAM ?= $(VERSION)
 IMAGE ?= snmp-exporter-index:$(VERSION)
 CACHE := .cache/snmp_exporter
 STAMP := $(CACHE)/.stamp
@@ -9,8 +12,8 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 .PHONY: test patch image binaries bench bench-check clean
 
-$(STAMP): exporter/collector/index.go exporter/collector/index_test.go exporter/index_param.go scripts/apply.py scripts/rebuild.sh
-	VERSION=$(VERSION) CACHE=$(CACHE) scripts/rebuild.sh
+$(STAMP): exporter/collector/index.go exporter/collector/index_test.go exporter/collector/raw.go exporter/collector/raw_test.go exporter/index_param.go exporter/raw.go exporter/raw_test.go scripts/apply.py scripts/rebuild.sh
+	VERSION=$(VERSION) UPSTREAM=$(UPSTREAM) CACHE=$(CACHE) scripts/rebuild.sh
 	mkdir -p $(CACHE)
 	touch $(STAMP)
 
@@ -25,7 +28,8 @@ $(SIM): sim/main.go sim/agent.go sim/device.go sim/agent_test.go sim/go.mod
 # generated patch round-trips, then load the example module.
 test: $(STAMP)
 	cd sim && go test .
-	cd $(CACHE) && go test ./collector/ -count=1 -timeout 180s -run 'TestIndexSuffixes|TestModuleForIndexes'
+	cd $(CACHE) && go test ./collector/ -count=1 -timeout 180s -run 'TestIndexSuffixes|TestModuleForIndexes|TestInstanceSuffixMatches|TestMalformedDot3|TestRaw|TestFormatRaw'
+	cd $(CACHE) && go test -count=1 -timeout 120s -run 'TestRaw' .
 	$(MAKE) $(EXPORTER)
 	cp examples/if_index.yml $(CACHE)/if_index.yml
 	cd $(CACHE) && ./snmp_exporter --dry-run --config.file=snmp.yml --config.file=if_index.yml
@@ -39,7 +43,8 @@ patch:
 
 image:
 	docker build \
-		--build-arg SNMP_EXPORTER_VERSION=$(VERSION) \
+		--build-arg SNMP_EXPORTER_VERSION=$(UPSTREAM) \
+		--build-arg RELEASE_VERSION=$(VERSION) \
 		--build-arg TARGETARCH=amd64 \
 		--build-arg BUSYBOX_ARCH=amd64 \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \

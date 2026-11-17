@@ -58,7 +58,7 @@ The index scrape does not grow with the size of the table. On the 8,192-interfac
 
 | What you want | What to pass | Where it already works |
 | --- | --- | --- |
-| One interface, or a list of them | `index=42` or `index=1,3,10-20` | `if_mib`, and `examples/if_index.yml` |
+| One interface, or a list of them | `index=42` or `index=1,3,10-20` | `if_mib` and `if_index` |
 | The IPv4 row for that same interface | `index=42` | `ip_mib`. `ipv4InterfaceTable` is indexed by ifIndex |
 | One chassis component | `index=5` | `cisco_device` rows indexed by `entPhysicalIndex`: power, sensors |
 | A memory pool on that component | `index=5.1` | `cisco_device` `cempMemPool*`, indexed by `entPhysicalIndex` then `cempMemPoolIndex` |
@@ -80,11 +80,13 @@ Stock `snmp.yml` has no BGP, ARP, or bridge module. Generating one does not need
 
 ## Smaller module
 
-`examples/if_index.yml` is a module for one interface: name, alias, description, speed, admin and oper status, octet counters, and `dot3StatsDuplexStatus` (EtherLike-MIB `1.3.6.1.2.1.10.7.2.1.19`, the same ifIndex). Duplex is a gauge: 1 unknown, 2 halfDuplex, 3 fullDuplex. `ifOperStatus` and `ifAdminStatus` stay numeric gauges, matching the stock module.
+`if_index` is a module for one interface: name, alias, description, speed, admin and oper status, octet counters, and `dot3StatsDuplexStatus` (EtherLike-MIB `1.3.6.1.2.1.10.7.2.1.19`, the same ifIndex). Duplex is a gauge: 1 unknown, 2 halfDuplex, 3 fullDuplex. `ifOperStatus` and `ifAdminStatus` stay numeric gauges, matching the stock module.
+
+In this repository the file is `examples/if_index.yml`. A release archive places it next to the binary as `if_index.yml`. The image has it at `/etc/snmp_exporter/if_index.yml` and does not load it unless you add the flag. The default command is still `--config.file=/etc/snmp_exporter/snmp.yml`.
 
 Eleven columns fit in one GET. `ifInOctets` is the 32-bit counter. `ifHCInOctets` and `ifHCOutOctets` are the 64-bit counters. Without `index`, the module walks only those columns, still once per interface.
 
-The image ships the file at `/etc/snmp_exporter/if_index.yml` and does not load it unless you add the flag. The default command is still `--config.file=/etc/snmp_exporter/snmp.yml`.
+A row is kept when the instance suffix is exactly the metric's indexes. `dot3StatsDuplexStatus` has one integer index, so `1.3.6.1.2.1.10.7.2.1.19.15` is ifIndex 15 and `1.3.6.1.2.1.10.7.2.1.19.1.5` is not ifIndex 1. A longer suffix is skipped. The same rule applies to every module. An indexed GET still asks for the exact OID and nothing under it.
 
 ```text
 --config.file=/etc/snmp_exporter/snmp.yml --config.file=/etc/snmp_exporter/if_index.yml
@@ -103,6 +105,7 @@ The image ships the file at `/etc/snmp_exporter/if_index.yml` and does not load 
 | `edge` | A switch: 1G ports, a few VLAN interfaces, one half-duplex port |
 | `core` | Loopback, 100G ports, aggregate ethernet, then VLAN subinterfaces |
 | `subscriber` | A few 100G uplinks and many `demux0.pp0` sessions at a high ifIndex |
+| `uap` | `lo` at ifIndex 1, `ath0` at 15, `br-trunk` at 33. The duplex column is twelve OIDs of the form `...19.1.<n>`, with values 0, 1, 2, 3, 64, 7 and 128. A GET of `...19.1`, `...19.15` or `...19.33` is noSuchInstance |
 
 ```sh
 make test
@@ -112,6 +115,22 @@ cd sim && go run . -profile edge -interfaces 48
 The process prints one JSON line with `sample_index` and `sample_name`, then answers `public` on `127.0.0.1:11611`. Point the exporter at that address. The same URL works against real hardware; use the device's community and ifIndex.
 
 `make bench` scrapes the simulator with and without `index` and rewrites [bench/RESULTS.md](bench/RESULTS.md). `make bench-check` is the smaller run used in CI (32 and 256 interfaces).
+
+## Raw OIDs
+
+`--snmp.raw-endpoint` enables `/snmp/raw`. The flag is off by default, and the route answers 404 until it is set. The body is text, one varbind per line: OID, type, and value. `noSuchInstance` is a line with no value.
+
+```text
+/snmp/raw?target=192.0.2.1&auth=public_v2&oid=1.3.6.1.2.1.1.1.0&oid=1.3.6.1.2.1.1.3.0
+```
+
+`walk=1` walks the one OID you name. The walk runs until that subtree ends, or until the HTTP client goes away, which is the same rule as `/snmp`. A packet that gets no answer uses the usual 5 second timeout and 3 retries. There is no row cap.
+
+```text
+/snmp/raw?target=192.0.2.1&auth=public_v2&oid=1.3.6.1.2.1.10.7.2.1.19&walk=1
+```
+
+One request may name at most 256 OIDs. `auth` is a name from the config. A `snmp_context` parameter is passed through when the device has one. Community, timeout, and retry are not parameters.
 
 ## Build
 
@@ -134,10 +153,10 @@ docker build -t snmp-exporter-index:v0.31.0 .
 
 | Path | What it is |
 | --- | --- |
-| `exporter/` | The change. `collector/index.go` decides which OIDs to GET. `index_param.go` is the HTTP wiring. |
+| `exporter/` | The change. `collector/index.go` decides which OIDs to GET, and skips an instance suffix longer than the metric's indexes. `index_param.go` wires that into `/snmp`. `raw.go` is `/snmp/raw`. |
 | `scripts/apply.py` | Copies that Go onto an upstream tree. |
 | `release/platforms.txt` | Image architectures and release binaries. |
-| `examples/if_index.yml` | The smaller module. |
+| `examples/if_index.yml` | The smaller module. Release archives ship it as `if_index.yml` next to the binary. |
 | `sim/` | The SNMP agent. |
 | `bench/` | The measurement, and `make bench` which refreshes it. |
 
@@ -151,7 +170,7 @@ patch -p1 < /path/to/snmp_exporter-v0.31.0-index.patch
 
 ## Image and binaries
 
-Pushes and pull requests to `main` run the tests and do not publish. Pushing a tag named for the upstream release, such as `v0.31.0`, publishes `ghcr.io/<owner>/<repo>:<tag>` and `:latest`, and attaches the patch, the binaries, and `sha256sums.txt` to the GitHub release. A manual run publishes `ghcr.io/<owner>/<repo>:sha-<commit>` and leaves `:latest` where it is.
+Pushes and pull requests to `main` run the tests and do not publish. Pushing a tag named for the upstream release, such as `v0.31.0`, publishes `ghcr.io/<owner>/<repo>:<tag>` and `:latest`, and attaches the patch, the binaries, and `sha256sums.txt` to the GitHub release. A later rebuild of that same upstream tag is `v0.31.0-1`, then `v0.31.0-2`. The image and the archives use that name, and `:latest` moves with it. The patch still applies to upstream `v0.31.0`. A manual run publishes `ghcr.io/<owner>/<repo>:sha-<commit>` and leaves `:latest` where it is.
 
 `make image` builds `linux/amd64`. A published image is a manifest for the container platforms in `release/platforms.txt`: `linux/amd64`, `linux/arm64`, `linux/arm/v7`, `linux/ppc64le`, and `linux/s390x`. Each image carries an SBOM and build provenance in the registry. Package visibility follows the repository.
 

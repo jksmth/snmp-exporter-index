@@ -25,6 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.p.outputs.version }}
+      upstream: ${{ steps.p.outputs.upstream }}
       image: ${{ steps.p.outputs.image }}
       date: ${{ steps.p.outputs.date }}
       publish_release: ${{ steps.p.outputs.publish_release }}
@@ -61,9 +62,11 @@ jobs:
             v[0-9]*) ;;
             *) echo "refusing version: $version" >&2; exit 1 ;;
           esac
+          upstream=$(python3 scripts/release.py upstream "$version")
           include=$(python3 scripts/release.py matrix)
           {
             echo "version=${version}"
+            echo "upstream=${upstream}"
             echo "image=${image}"
             echo "date=${date}"
             echo "publish_release=${publish_release}"
@@ -80,6 +83,7 @@ jobs:
       - name: Clone upstream and apply the patch
         env:
           VERSION: ${{ needs.plan.outputs.version }}
+          UPSTREAM: ${{ needs.plan.outputs.upstream }}
         run: make patch
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -90,11 +94,13 @@ jobs:
       - name: Test the source, the generated patch, and the example module
         env:
           VERSION: ${{ needs.plan.outputs.version }}
+          UPSTREAM: ${{ needs.plan.outputs.upstream }}
         run: make test
 
       - name: Walk a simulated switch and fetch one interface
         env:
           VERSION: ${{ needs.plan.outputs.version }}
+          UPSTREAM: ${{ needs.plan.outputs.upstream }}
         run: make bench-check
 
   binaries:
@@ -107,6 +113,7 @@ jobs:
       - name: Clone upstream and apply the patch
         env:
           VERSION: ${{ needs.plan.outputs.version }}
+          UPSTREAM: ${{ needs.plan.outputs.upstream }}
         run: make patch
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -117,6 +124,7 @@ jobs:
       - name: Cross-compile release archives
         env:
           VERSION: ${{ needs.plan.outputs.version }}
+          UPSTREAM: ${{ needs.plan.outputs.upstream }}
           BUILD_DATE: ${{ needs.plan.outputs.date }}
         run: make binaries
 
@@ -160,7 +168,8 @@ jobs:
           provenance: true
           sbom: true
           build-args: |
-            SNMP_EXPORTER_VERSION=${{ needs.plan.outputs.version }}
+            SNMP_EXPORTER_VERSION=${{ needs.plan.outputs.upstream }}
+            RELEASE_VERSION=${{ needs.plan.outputs.version }}
             BUSYBOX_ARCH=${{ matrix.busybox }}
             BUILD_DATE=${{ needs.plan.outputs.date }}
           outputs: type=image,name=${{ needs.plan.outputs.image }},push-by-digest=true,name-canonical=true,push=true
@@ -254,6 +263,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.plan.outputs.version }}
+          UPSTREAM: ${{ needs.plan.outputs.upstream }}
           IMAGE: ${{ needs.plan.outputs.image }}
           MOVE_LATEST: ${{ needs.plan.outputs.move_latest }}
         run: |
@@ -273,11 +283,16 @@ jobs:
           fi
           python3 - <<'PY'
           import os
+          import textwrap
           from pathlib import Path
           version = os.environ["VERSION"]
+          upstream = os.environ["UPSTREAM"]
           image = os.environ["IMAGE"]
           latest = " and `:latest`" if os.environ.get("MOVE_LATEST") == "true" else ""
-          text = f"""snmp_exporter {version} with an optional `index` query parameter.
+          text = textwrap.dedent(f"""\
+          snmp_exporter {upstream} with an optional `index` query parameter.
+
+          A row whose instance suffix is longer than the metric's indexes is skipped. `--snmp.raw-endpoint` enables `/snmp/raw`.
 
           Image: `{image}:{version}`{latest}.
 
@@ -285,12 +300,12 @@ jobs:
 
           Binaries for those Linux architectures, plus darwin/amd64, darwin/arm64, and windows/amd64, are attached with `sha256sums.txt`.
 
-          Apply the patch to a clean [prometheus/snmp_exporter](https://github.com/prometheus/snmp_exporter) {version} tree:
+          Apply the patch to a clean [prometheus/snmp_exporter](https://github.com/prometheus/snmp_exporter) {upstream} tree:
 
           ```sh
           patch -p1 < snmp_exporter-{version}-index.patch
           ```
-          """
+          """)
           Path(os.environ["RUNNER_TEMP"], "notes.md").write_text(text.strip() + "\n")
           PY
           if gh release view "$VERSION" >/dev/null 2>&1; then
